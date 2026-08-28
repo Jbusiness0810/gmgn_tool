@@ -1,0 +1,317 @@
+import type { GmgnDataSource, RawRankToken, RawTrenchToken, TrenchesData } from "./gmgn/types.js";
+
+/**
+ * Synthetic GMGN feed for keyless demos (`npm run mock`).
+ *
+ * Every metric is a deterministic function of wall-clock time, so replaying past
+ * timestamps (backfill) and live polling produce one consistent trajectory:
+ *  - "surgers" start a holder/volume ramp a few minutes before launch, so the
+ *    screener visibly catches them climbing from tracking → watch → flagged;
+ *  - "risky" tokens carry rug/wash/concentration signals and stay blocked;
+ *  - the rest jitter around a baseline.
+ */
+
+interface Profile {
+  address: string;
+  symbol: string;
+  name: string;
+  createdAgoMin: number;      // age at process start
+  baseHolders: number;
+  baseVolPerMin: number;      // USD
+  liquidity: number;
+  marketCap: number;
+  price: number;
+  surge?: { startAgoMin: number; holdersPerMin: number; volMultiple: number };
+  fade?: boolean;
+  risk?: Partial<RawRankToken>;
+  smartMoney?: number;
+  kols?: number;
+  buyBias?: number;           // 0.5 = neutral
+}
+
+const START = Date.now();
+
+const PROFILES: Profile[] = [
+  // --- surgers: the ones the screener should flag ---
+  {
+    address: "MockRocketPumpSurge1111111111111111111111111",
+    symbol: "RCKT",
+    name: "Rocket Season",
+    createdAgoMin: 95,
+    baseHolders: 420,
+    baseVolPerMin: 900,
+    liquidity: 86_000,
+    marketCap: 640_000,
+    price: 0.00064,
+    surge: { startAgoMin: 9, holdersPerMin: 14, volMultiple: 6 },
+    smartMoney: 4,
+    kols: 1,
+    buyBias: 0.68,
+  },
+  {
+    address: "MockFrogWifHatSurge2222222222222222222222222",
+    symbol: "FWH",
+    name: "frog wif hat",
+    createdAgoMin: 55,
+    baseHolders: 260,
+    baseVolPerMin: 500,
+    liquidity: 42_000,
+    marketCap: 310_000,
+    price: 0.00031,
+    surge: { startAgoMin: 6, holdersPerMin: 9, volMultiple: 4.5 },
+    smartMoney: 3,
+    buyBias: 0.64,
+  },
+  {
+    address: "MockGigaChadSurge333333333333333333333333333",
+    symbol: "GIGA",
+    name: "gigachad v2",
+    createdAgoMin: 220,
+    baseHolders: 1350,
+    baseVolPerMin: 2_100,
+    liquidity: 190_000,
+    marketCap: 2_400_000,
+    price: 0.0024,
+    surge: { startAgoMin: 3, holdersPerMin: 22, volMultiple: 3.2 },
+    smartMoney: 6,
+    kols: 2,
+    buyBias: 0.61,
+  },
+  // --- risky: momentum but hard-gated ---
+  {
+    address: "MockRugCandidate44444444444444444444444444444",
+    symbol: "SAFEMOON2",
+    name: "definitely safe moon",
+    createdAgoMin: 40,
+    baseHolders: 310,
+    baseVolPerMin: 1_500,
+    liquidity: 55_000,
+    marketCap: 420_000,
+    price: 0.00042,
+    surge: { startAgoMin: 8, holdersPerMin: 11, volMultiple: 5 },
+    risk: { rug_ratio: 0.62, top_10_holder_rate: 0.44 },
+    buyBias: 0.66,
+  },
+  {
+    address: "MockWashTrader555555555555555555555555555555",
+    symbol: "VOLUME",
+    name: "organic volume token",
+    createdAgoMin: 130,
+    baseHolders: 800,
+    baseVolPerMin: 4_000,
+    liquidity: 120_000,
+    marketCap: 900_000,
+    price: 0.0009,
+    risk: { is_wash_trading: true, bundler_rate: 0.41 },
+    buyBias: 0.52,
+  },
+  {
+    address: "MockThinLiquidity6666666666666666666666666666",
+    symbol: "THIN",
+    name: "thin ice",
+    createdAgoMin: 25,
+    baseHolders: 140,
+    baseVolPerMin: 350,
+    liquidity: 6_500,
+    marketCap: 95_000,
+    price: 0.000095,
+    surge: { startAgoMin: 5, holdersPerMin: 6, volMultiple: 3 },
+    buyBias: 0.6,
+  },
+  // --- faders ---
+  {
+    address: "MockYesterdayHero7777777777777777777777777777",
+    symbol: "HERO",
+    name: "yesterdays hero",
+    createdAgoMin: 900,
+    baseHolders: 5_200,
+    baseVolPerMin: 800,
+    liquidity: 260_000,
+    marketCap: 1_800_000,
+    price: 0.0018,
+    fade: true,
+    smartMoney: 1,
+    buyBias: 0.42,
+  },
+  {
+    address: "MockSlowBleed88888888888888888888888888888888",
+    symbol: "BLEED",
+    name: "slow bleed",
+    createdAgoMin: 400,
+    baseHolders: 2_100,
+    baseVolPerMin: 300,
+    liquidity: 74_000,
+    marketCap: 380_000,
+    price: 0.00038,
+    fade: true,
+    buyBias: 0.45,
+  },
+];
+
+// A tail of unremarkable tokens to fill the tables.
+for (let i = 0; i < 18; i++) {
+  PROFILES.push({
+    address: `MockFiller${String(i).padStart(2, "0")}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+    symbol: ["DOGE2", "PEPE3", "MOON", "CHAD", "WAGMI", "NGMI", "SER", "FUD", "COPE", "HODL", "APE", "BONK2", "MEOW", "WOOF", "SNEK", "BULL", "BEAR", "CRAB"][i]!,
+    name: `mock token ${i}`,
+    createdAgoMin: 60 + i * 37,
+    baseHolders: 150 + i * 61,
+    baseVolPerMin: 120 + (i % 7) * 90,
+    liquidity: 15_000 + i * 6_000,
+    marketCap: 120_000 + i * 45_000,
+    price: 0.0001 * (i + 1),
+    smartMoney: i % 5 === 0 ? 1 : 0,
+    buyBias: 0.47 + (i % 5) * 0.02,
+  });
+}
+
+export class MockSource implements GmgnDataSource {
+  private nowOverride: number | null = null;
+
+  /** Backfill support: pins "now" while the engine replays past cycles. */
+  setNow(ts: number | null): void {
+    this.nowOverride = ts;
+  }
+
+  private now(): number {
+    return this.nowOverride ?? Date.now();
+  }
+
+  async trendingRank(chain: string, interval: string): Promise<RawRankToken[]> {
+    const now = this.now();
+    return PROFILES.map((p, i) => this.rankRow(p, i, chain, interval, now));
+  }
+
+  async trenches(chain: string): Promise<TrenchesData> {
+    const now = this.now();
+    const early: RawTrenchToken[] = [
+      {
+        address: "MockTrenchNewborn99999999999999999999999999999",
+        symbol: "BABY",
+        name: "newborn launchpad token",
+        usd_market_cap: 48_000,
+        liquidity: 21_000,
+        volume_1h: 60_000 + noise(now, 991) * 8_000,
+        holder_count: Math.round(60 + minutesSince(now, 12) * 4),
+        created_timestamp: Math.floor((START - 12 * 60_000) / 1000),
+        launchpad_platform: "Pump.fun",
+        progress: 0.82,
+        rug_ratio: 0.08,
+        smart_degen_count: 2,
+        buys: 40,
+        sells: 18,
+      },
+    ];
+    return { pump: early, completed: [] };
+  }
+
+  private rankRow(p: Profile, seed: number, chain: string, interval: string, now: number): RawRankToken {
+    const holders = this.holders(p, now);
+    const volPerMin = this.volPerMin(p, now);
+    const vol1hAvgPerMin = this.avgVolPerMin(p, now, 60);
+
+    const volume =
+      interval === "1m" ? volPerMin :
+      interval === "5m" ? this.avgVolPerMin(p, now, 5) * 5 :
+      vol1hAvgPerMin * 60;
+
+    const surging = this.surgeFactor(p, now) > 0.3;
+    const buyBias = (p.buyBias ?? 0.5) + (surging ? 0.05 : 0);
+    const swaps5m = Math.max(4, Math.round((this.avgVolPerMin(p, now, 5) * 5) / 150));
+    const buys = Math.round(swaps5m * buyBias);
+
+    const priceChange5m = p.fade
+      ? -3 - noise(now + seed, 17) * 4
+      : surging
+        ? 6 + this.surgeFactor(p, now) * 18 + noise(now + seed, 31) * 3
+        : noise(now + seed, 13) * 4 - 2;
+
+    return {
+      address: p.address,
+      symbol: p.symbol,
+      name: p.name,
+      chain,
+      price: p.price * (1 + priceChange5m / 100),
+      market_cap: p.marketCap * (1 + this.surgeFactor(p, now) * 0.6),
+      liquidity: p.liquidity,
+      volume: Math.round(volume),
+      swaps: interval === "5m" ? swaps5m : Math.round(swaps5m * (interval === "1m" ? 0.25 : 10)),
+      buys: interval === "5m" ? buys : undefined,
+      sells: interval === "5m" ? swaps5m - buys : undefined,
+      holder_count: holders,
+      price_change_percent1m: priceChange5m / 4,
+      price_change_percent5m: priceChange5m,
+      price_change_percent1h: priceChange5m * 2.5,
+      creation_timestamp: Math.floor((START - p.createdAgoMin * 60_000) / 1000),
+      launchpad_platform: seed % 2 ? "Pump.fun" : "letsbonk",
+      hot_level: surging ? 3 : 1,
+      rug_ratio: 0.05,
+      is_wash_trading: false,
+      top_10_holder_rate: 0.14 + (seed % 4) * 0.03,
+      bundler_rate: 0.05,
+      rat_trader_amount_rate: 0.04,
+      dev_team_hold_rate: 0.02,
+      creator_token_status: seed % 3 ? "creator_close" : "creator_hold",
+      smart_degen_count: p.smartMoney ?? 0,
+      renowned_count: p.kols ?? 0,
+      twitter_username: `${p.symbol.toLowerCase()}_coin`,
+      website: null,
+      ...p.risk,
+    };
+  }
+
+  /** Holders as a function of time: base + surge ramp (or fade), plus jitter. */
+  private holders(p: Profile, now: number): number {
+    let h = p.baseHolders + minutesSince(now, 0) * 0.15; // slow organic drift for all
+    if (p.surge) {
+      const surgeStart = START - p.surge.startAgoMin * 60_000;
+      const minsIn = Math.max(0, (now - surgeStart) / 60_000);
+      h += p.surge.holdersPerMin * minsIn * sigmoid(minsIn / 2);
+    }
+    if (p.fade) h -= minutesSince(now, 0) * 0.4;
+    return Math.round(h + noise(now, hash(p.address)) * 3);
+  }
+
+  private volPerMin(p: Profile, now: number): number {
+    let v = p.baseVolPerMin * (0.85 + noise(now, hash(p.address) + 7) * 0.3);
+    if (p.surge) v *= 1 + (p.surge.volMultiple - 1) * this.surgeFactor(p, now);
+    if (p.fade) v *= 0.5;
+    return v;
+  }
+
+  /** Trailing average of volPerMin — numeric integral, 1-minute steps. */
+  private avgVolPerMin(p: Profile, now: number, minutes: number): number {
+    let sum = 0;
+    for (let i = 0; i < minutes; i++) sum += this.volPerMin(p, now - i * 60_000);
+    return sum / minutes;
+  }
+
+  private surgeFactor(p: Profile, now: number): number {
+    if (!p.surge) return 0;
+    const surgeStart = START - p.surge.startAgoMin * 60_000;
+    const minsIn = (now - surgeStart) / 60_000;
+    return minsIn <= 0 ? 0 : sigmoid((minsIn - 2) / 1.5);
+  }
+}
+
+/** Minutes elapsed since `agoMin` minutes before process start. */
+function minutesSince(now: number, agoMin: number): number {
+  return Math.max(0, (now - (START - agoMin * 60_000)) / 60_000);
+}
+
+function sigmoid(x: number): number {
+  return 1 / (1 + Math.exp(-x));
+}
+
+/** Deterministic 0..1 "noise" from time bucket + seed (30s buckets). */
+function noise(ts: number, seed: number): number {
+  const bucket = Math.floor(ts / 30_000);
+  const x = Math.sin(bucket * 127.1 + seed * 311.7) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function hash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h % 1000);
+}

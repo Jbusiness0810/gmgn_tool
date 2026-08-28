@@ -1,0 +1,21 @@
+{
+  "name": "gmgn-screener",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Momentum screener for up-and-coming tokens on GMGN.ai — flags rapid holder growth and volume acceleration.",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "mock": "MOCK=1 tsx src/index.ts",
+    "keygen": "tsx src/keygen.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "tsx": "^4.23.12",
+    "typescript": "^5.6.2"
+  }
+}

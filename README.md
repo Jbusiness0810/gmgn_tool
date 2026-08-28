@@ -1,0 +1,130 @@
+# GMGN Momentum Screener
+
+Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai) by watching for the two
+signals that most often precede a run: **rapid holder growth** and **volume
+acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
+computes the deltas itself (GMGN only serves point-in-time snapshots), scores
+every token 0–100, and raises an alert when one crosses the flag threshold —
+with hard risk gates so rugs, honeypots and wash-traded tokens never get flagged
+no matter how fast they move.
+
+![status](https://img.shields.io/badge/data-GMGN.ai%20OpenAPI-6ce675)
+
+> ⚠️ **Not financial advice.** This is a research/screening tool. Meme-token
+> trading is extremely high risk; *flagged ≠ safe*. Always do your own due
+> diligence before touching anything it surfaces.
+
+## Quick start
+
+```bash
+git clone https://github.com/Jbusiness0810/gmgn_tool.git
+cd gmgn_tool
+npm install
+
+# Try it immediately with synthetic data (no API key needed):
+npm run mock
+# → open http://localhost:4477
+
+# Real data:
+cp .env.example .env       # then paste your key into GMGN_API_KEY
+npm start
+```
+
+**Getting an API key:** the *Create API Key* dialog (gmgn.ai → **API** → *GMGN
+API Management* → **Create API Key**) asks you to upload an Ed25519/RSA public
+key first. Generate one with:
+
+```bash
+npm run keygen
+```
+
+This creates an Ed25519 key pair at `~/.config/gmgn/keypair.pem` (same location
+and format as the official `gmgn-cli config`, and reused if one already exists),
+prints the **public** key to paste into the dialog, and prints a
+`gmgn.ai/ai/generateapi?pbk=…` link that pre-fills it for you. In the dialog
+keep **Enable Reading** on — **Enable Trading is not needed**: this screener
+only calls read-only routes, never loads the private key, and never trades.
+Paste the resulting API key into `.env` as `GMGN_API_KEY` (up to 3 keys per
+account, free tier available).
+
+Note: the GMGN OpenAPI is IPv4-only. If requests fail with 401/403 and the key
+is correct, disable IPv6 on your interface.
+
+## What it does
+
+Every `POLL_INTERVAL_SEC` (default 30s) the engine:
+
+1. **Fetches** `GET /v1/market/rank` at three intervals (`1m`, `5m`, `1h`) plus
+   `POST /v1/trenches` (near-completion + freshly graduated launchpad tokens),
+   ~6 rate-limit weight per cycle against a 20/s bucket.
+2. **Snapshots** every token: holders, per-interval USD volume, buys/sells,
+   price, market cap, liquidity. History is kept for 3h (persisted to
+   `data/state.json`, so restarts don't lose the deltas).
+3. **Computes deltas** per token:
+   - *Holder velocity* — holders gained per minute over the last ~5 minutes,
+     plus *acceleration* (recent 5m velocity vs the 5m before it).
+   - *Volume ratio* — trailing 1m (and 5m) volume vs the token's **own** 1h
+     average: `vol_1m ÷ (vol_1h / 60)`. A token doing 3× its own baseline is
+     heating up regardless of its absolute size.
+   - *Buy pressure* — buys ÷ total swaps over the trailing 5m.
+4. **Scores** 0–100 (weighting follows the "holder + volume delta first" brief):
+
+   | Component | Points | Driven by |
+   |---|---|---|
+   | Holder momentum | 0–40 | velocity vs target (default 10/min = full), % growth, acceleration bonus |
+   | Volume momentum | 0–40 | 1m & 5m volume vs own 1h average (default 3× = full), absolute-volume floor |
+   | Confirmation | −4–20 | buy ratio > 50%, positive 5m price, smart-money & KOL wallets |
+   | Risk penalties | ≤ 0 | bundlers, insiders, top-10 concentration, dev overhang, snipers, extreme youth |
+
+5. **Gates** (hard blocks, from GMGN's own screening guidance): `rug_ratio` >
+   0.3, wash trading, honeypot, top-10 holders > 50%, liquidity < $10k, < 25
+   holders. Blocked tokens show in the dashboard with the reason, score 0.
+6. **Flags** a token when it scores ≥ `FLAG_SCORE` (default 70) for **2
+   consecutive cycles** (debounce against one-tick spikes); ≥ `WATCH_SCORE`
+   (default 50) marks it *watch*. Flag events print to the console, append to
+   `data/alerts.jsonl`, feed the dashboard's alert panel, and optionally POST to
+   `ALERT_WEBHOOK_URL` (payload includes Discord-style `content` and
+   Slack-style `text` fields).
+
+The dashboard (http://localhost:4477) shows flagged/watch tokens with holder and
+volume sparklines, Δholders/5m, volume-vs-baseline multiple, buy %, market cap,
+liquidity, smart-money count, and a click-to-expand score breakdown with every
+reason and blocker. Rows link straight to the token's gmgn.ai page.
+
+## Configuration
+
+All via `.env` (see [.env.example](.env.example)):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GMGN_API_KEY` | — | required (except `npm run mock`) |
+| `CHAIN` | `sol` | `sol` / `bsc` / `base` / `eth` |
+| `POLL_INTERVAL_SEC` | `30` | seconds between cycles (min 10) |
+| `PORT` | `4477` | dashboard port |
+| `FLAG_SCORE` / `WATCH_SCORE` | `70` / `50` | status thresholds |
+| `HOLDER_VEL_TARGET` | `10` | holders/min that earns full holder points |
+| `VOL_RATIO_TARGET` | `3` | volume-vs-1h-average multiple for full points |
+| `MIN_LIQUIDITY_USD` / `MIN_HOLDERS` | `10000` / `25` | hard gates |
+| `MAX_RUG_RATIO` / `MAX_TOP10_RATE` | `0.3` / `0.5` | hard gates |
+| `ALERT_WEBHOOK_URL` | — | optional webhook for flag alerts |
+
+Tune the two targets to taste: lower them on quiet days to surface more, raise
+them in a frenzy to only see the outliers.
+
+## Project layout
+
+```
+src/gmgn/client.ts      GMGN OpenAPI client (X-APIKEY auth, envelope parsing,
+                        request spacing + 429/reset handling)
+src/gmgn/types.ts       raw API response shapes
+src/screener/model.ts   snapshot / signals / score / token models
+src/screener/signals.ts delta math (holder velocity & acceleration, vol ratios)
+src/screener/score.ts   scoring + hard risk gates
+src/screener/engine.ts  poll loop, history, statuses, alerts, persistence
+src/mock.ts             deterministic synthetic feed for `npm run mock`
+src/server.ts           http server: dashboard + /api/state
+public/index.html       the dashboard (vanilla JS, zero deps)
+```
+
+Zero runtime dependencies — Node ≥ 18.17 (built-in `fetch`), `tsx` to run
+TypeScript directly. `npm run typecheck` for the strict `tsc` pass.

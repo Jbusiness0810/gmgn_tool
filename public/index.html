@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GMGN Momentum Screener</title>
+<style>
+  :root {
+    --bg: #0b0e11; --panel: #12161c; --panel2: #171c23; --border: #222933;
+    --text: #e8edf2; --dim: #8b95a3; --faint: #5a6472;
+    --green: #6ce675; --green-dim: #2c5a33; --red: #ff6b6b; --amber: #ffc94d; --blue: #6cb2ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.45 ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  }
+  a { color: var(--green); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+    position: sticky; top: 0; z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .5px; }
+  header h1 span { color: var(--green); }
+  .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    border: 1px solid var(--border); color: var(--dim); background: var(--panel2);
+  }
+  .badge.mock { color: var(--amber); border-color: #5a4a1e; }
+  .badge.chain { color: var(--blue); text-transform: uppercase; }
+  .spacer { flex: 1; }
+  .meta { color: var(--faint); font-size: 11px; }
+  #err {
+    display: none; margin: 10px 20px 0; padding: 8px 12px; border-radius: 6px;
+    background: #3a1720; border: 1px solid #6b2430; color: #ff9d9d; font-size: 12px;
+  }
+
+  .layout { display: grid; grid-template-columns: 1fr 300px; gap: 16px; padding: 16px 20px 40px; }
+  .layout > main { min-width: 0; }  /* let the table scroll inside .tablewrap instead of widening the page */
+  @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+  .card .n { font-size: 22px; font-weight: 700; }
+  .card .l { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
+  .card.flagged .n { color: var(--green); }
+  .card.watch .n { color: var(--amber); }
+  .card.blocked .n { color: var(--red); }
+
+  .controls { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  .tab {
+    cursor: pointer; padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--dim); font-size: 12px;
+  }
+  .tab.active { color: var(--text); border-color: var(--green-dim); background: #16241a; }
+  #search {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 5px 10px; font: inherit; width: 180px;
+  }
+
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .tablewrap { overflow-x: auto; border-radius: 8px; }
+  th {
+    text-align: left; color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .8px;
+    padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--panel2); white-space: nowrap;
+  }
+  td { padding: 8px 10px; border-bottom: 1px solid #1a2028; vertical-align: middle; white-space: nowrap; }
+  tr.row { cursor: pointer; }
+  tr.row:hover { background: #161b22; }
+  tr.detail td { background: #0e1218; white-space: normal; }
+
+  .sym { font-weight: 700; }
+  .name { color: var(--faint); font-size: 11px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+  .pos { color: var(--green); } .neg { color: var(--red); } .dim { color: var(--dim); }
+
+  .status { font-size: 10px; padding: 2px 7px; border-radius: 9px; font-weight: 700; letter-spacing: .5px; }
+  .status.flagged { background: #16351c; color: var(--green); border: 1px solid #2c5a33; }
+  .status.watch { background: #37301a; color: var(--amber); border: 1px solid #5a4a1e; }
+  .status.tracking { background: #1a2028; color: var(--dim); border: 1px solid var(--border); }
+  .status.blocked { background: #3a1720; color: var(--red); border: 1px solid #6b2430; }
+
+  .scorebar { display: inline-block; width: 64px; height: 6px; background: #1a2028; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
+  .scorebar i { display: block; height: 100%; border-radius: 3px; background: var(--green); }
+  .scorebar i.mid { background: var(--amber); }
+  .scorebar i.low { background: var(--faint); }
+
+  svg.spark { vertical-align: middle; }
+
+  .alerts { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; align-self: start; position: sticky; top: 70px; }
+  .alerts h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); }
+  .alert { border-left: 2px solid var(--green); padding: 6px 10px; margin-bottom: 8px; background: var(--panel2); border-radius: 0 6px 6px 0; }
+  .alert .t { color: var(--faint); font-size: 10px; }
+  .alert .r { color: var(--dim); font-size: 11px; white-space: normal; }
+
+  .breakdown { display: grid; grid-template-columns: 110px 1fr 46px; gap: 4px 10px; margin: 6px 0 10px; max-width: 460px; align-items: center; }
+  .breakdown .bar { height: 8px; background: #1a2028; border-radius: 4px; }
+  .breakdown .bar i { display: block; height: 100%; border-radius: 4px; background: var(--green); }
+  .breakdown .bar i.pen { background: var(--red); }
+  ul.reasons { margin: 4px 0; padding-left: 18px; }
+  ul.reasons li { margin: 2px 0; color: var(--dim); }
+  ul.reasons li.warn { color: var(--amber); }
+  ul.reasons li.block { color: var(--red); }
+
+  footer { padding: 0 20px 30px; color: var(--faint); font-size: 11px; max-width: 900px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>GMGN <span>Momentum Screener</span></h1>
+  <span class="badge chain" id="chain">—</span>
+  <span class="badge mock" id="mockbadge" style="display:none">MOCK DATA</span>
+  <span class="spacer"></span>
+  <span class="meta" id="updated">loading…</span>
+</header>
+<div id="err"></div>
+
+<div class="layout">
+  <main>
+    <div class="cards">
+      <div class="card flagged"><div class="n" id="c-flagged">0</div><div class="l">Flagged</div></div>
+      <div class="card watch"><div class="n" id="c-watch">0</div><div class="l">Watch</div></div>
+      <div class="card"><div class="n" id="c-tracking">0</div><div class="l">Tracked</div></div>
+      <div class="card blocked"><div class="n" id="c-blocked">0</div><div class="l">Risk-blocked</div></div>
+    </div>
+
+    <div class="controls">
+      <div class="tab active" data-f="hot">Flagged + Watch</div>
+      <div class="tab" data-f="all">All</div>
+      <div class="tab" data-f="flagged">Flagged</div>
+      <div class="tab" data-f="blocked">Blocked</div>
+      <input id="search" placeholder="filter symbol / address…">
+    </div>
+
+    <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Token</th><th>Status</th><th>Score</th>
+        <th>Holders</th><th>Δ Holders (5m)</th>
+        <th>Vol 1m</th><th>Vol Δ (vs 1h avg)</th>
+        <th>Buys 5m</th><th>Price 5m</th>
+        <th>MC</th><th>Liq</th><th>Smart $</th><th>Age</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    </div>
+  </main>
+
+  <aside class="alerts">
+    <h2>Alerts</h2>
+    <div id="alerts"><span class="dim">none yet</span></div>
+  </aside>
+</div>
+
+<footer>
+  Screener methodology: score = holder momentum (0–40, holder velocity &amp; growth over ~5m)
+  + volume momentum (0–40, 1m/5m volume vs the token's own 1h average) + confirmation (0–20,
+  buy pressure, price, smart money) − risk penalties; hard gates (rug ratio, wash trading,
+  honeypot, concentration, liquidity) block outright. Data: GMGN.ai OpenAPI.
+  <br><br>⚠ This is a research/screening tool, not financial advice. Meme-token trading is
+  extremely high risk; flagged ≠ safe. Always do your own due diligence.
+</footer>
+
+<script>
+"use strict";
+let state = null;
+let filter = "hot";
+let expanded = new Set();
+
+const $ = (id) => document.getElementById(id);
+
+function fmtUsd(x) {
+  if (x == null) return "—";
+  if (x >= 1e9) return "$" + (x / 1e9).toFixed(2) + "B";
+  if (x >= 1e6) return "$" + (x / 1e6).toFixed(2) + "M";
+  if (x >= 1e3) return "$" + (x / 1e3).toFixed(1) + "k";
+  return "$" + x.toFixed(0);
+}
+function fmtNum(x) {
+  if (x == null) return "—";
+  if (x >= 1e6) return (x / 1e6).toFixed(2) + "M";
+  if (x >= 1e3) return (x / 1e3).toFixed(1) + "k";
+  return String(Math.round(x));
+}
+function fmtAge(unixSec) {
+  if (!unixSec) return "—";
+  const m = (Date.now() / 1000 - unixSec) / 60;
+  if (m < 60) return m.toFixed(0) + "m";
+  if (m < 1440) return (m / 60).toFixed(1) + "h";
+  return (m / 1440).toFixed(1) + "d";
+}
+function signed(x, digits, suffix) {
+  if (x == null) return '<span class="dim">—</span>';
+  const cls = x > 0 ? "pos" : x < 0 ? "neg" : "dim";
+  const sign = x > 0 ? "+" : "";
+  return `<span class="${cls}">${sign}${x.toFixed(digits)}${suffix || ""}</span>`;
+}
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function sparkline(values, w = 72, h = 20) {
+  const pts = (values || []).filter((v) => v != null);
+  if (pts.length < 2) return '<span class="dim">·</span>';
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const span = max - min || 1;
+  const step = w / (pts.length - 1);
+  const path = pts.map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`).join(" ");
+  const up = pts[pts.length - 1] >= pts[0];
+  const color = up ? "var(--green)" : "var(--red)";
+  return `<svg class="spark" width="${w}" height="${h}"><polyline points="${path}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+}
+
+function matches(t) {
+  const q = $("search").value.trim().toLowerCase();
+  if (q && !t.symbol.toLowerCase().includes(q) && !t.address.toLowerCase().includes(q)) return false;
+  if (filter === "all") return true;
+  if (filter === "hot") return t.status === "flagged" || t.status === "watch";
+  return t.status === filter;
+}
+
+function scoreCell(score) {
+  const cls = score.total >= 70 ? "" : score.total >= 50 ? "mid" : "low";
+  return `<span class="scorebar"><i class="${cls}" style="width:${score.total}%"></i></span><b>${score.total.toFixed(0)}</b>`;
+}
+
+function render() {
+  if (!state) return;
+  $("chain").textContent = state.chain;
+  $("mockbadge").style.display = state.mock ? "" : "none";
+  $("updated").textContent = state.updatedAt
+    ? "updated " + new Date(state.updatedAt).toLocaleTimeString() + " · refresh " + state.pollIntervalSec + "s"
+    : "waiting for first cycle…";
+  $("err").style.display = state.lastError ? "block" : "none";
+  $("err").textContent = state.lastError ? "Last cycle failed: " + state.lastError : "";
+
+  $("c-flagged").textContent = state.counts.flagged;
+  $("c-watch").textContent = state.counts.watch;
+  $("c-tracking").textContent = state.counts.tracking;
+  $("c-blocked").textContent = state.counts.blocked;
+
+  const rows = [];
+  for (const t of state.tokens) {
+    if (!matches(t)) continue;
+    const s = t.signals, l = t.latest || {};
+    const url = `https://gmgn.ai/${t.chain}/token/${t.address}`;
+    rows.push(`<tr class="row" data-a="${esc(t.address)}">
+      <td><span class="sym">${esc(t.symbol)}</span> <a href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
+          <div class="name">${esc(t.name)}</div></td>
+      <td><span class="status ${t.status}">${t.status.toUpperCase()}</span></td>
+      <td>${scoreCell(t.score)}</td>
+      <td>${fmtNum(l.holders)} ${sparkline(t.holderSpark)}</td>
+      <td>${s.holderDelta5m != null ? signed(s.holderDelta5m, 0) + ' <span class="dim">(' + (s.holderVelPerMin >= 0 ? "+" : "") + s.holderVelPerMin.toFixed(1) + "/min)</span>" : '<span class="dim">warming up…</span>'}</td>
+      <td>${fmtUsd(l.vol1m)} ${sparkline(t.volSpark)}</td>
+      <td>${s.volRatio1m != null ? signed(s.volRatio1m, 1, "×") : '<span class="dim">—</span>'}</td>
+      <td>${s.buyRatio5m != null ? Math.round(s.buyRatio5m * 100) + "%" : "—"}</td>
+      <td>${signed(t.priceChange5m, 1, "%")}</td>
+      <td>${fmtUsd(l.marketCap)}</td>
+      <td>${fmtUsd(l.liquidity)}</td>
+      <td>${t.smartMoney ?? "—"}${t.kols ? ' <span class="dim">+' + t.kols + ' KOL</span>' : ""}</td>
+      <td class="dim">${fmtAge(t.createdAt)}</td>
+    </tr>`);
+    if (expanded.has(t.address)) rows.push(detailRow(t));
+  }
+  $("rows").innerHTML = rows.join("") || '<tr><td colspan="13" class="dim">no tokens match</td></tr>';
+
+  $("alerts").innerHTML = (state.alerts || []).length
+    ? state.alerts.map((a) => `<div class="alert">
+        <b>${esc(a.symbol)}</b> <span class="pos">score ${a.score.toFixed(0)}</span>
+        <a href="https://gmgn.ai/${a.chain}/token/${a.address}" target="_blank" rel="noopener">↗</a>
+        <div class="t">${new Date(a.ts).toLocaleTimeString()}</div>
+        <div class="r">${esc((a.reasons || []).slice(0, 3).join(" · "))}</div>
+      </div>`).join("")
+    : '<span class="dim">none yet</span>';
+}
+
+function detailRow(t) {
+  const sc = t.score;
+  const bar = (v, max, pen) =>
+    `<div class="bar"><i class="${pen ? "pen" : ""}" style="width:${Math.min(100, Math.abs(v) / max * 100)}%"></i></div>`;
+  const reasons = (sc.reasons || []).map((r) =>
+    `<li class="${r.startsWith("⚠") ? "warn" : ""}">${esc(r)}</li>`).join("");
+  const blockers = (sc.blockers || []).map((b) => `<li class="block">⛔ ${esc(b)}</li>`).join("");
+  const links = [
+    `<a href="https://gmgn.ai/${t.chain}/token/${t.address}" target="_blank" rel="noopener">gmgn.ai ↗</a>`,
+    t.twitter ? `<a href="https://x.com/${esc(t.twitter)}" target="_blank" rel="noopener">@${esc(t.twitter)} ↗</a>` : "",
+    t.website ? `<a href="${esc(t.website)}" target="_blank" rel="noopener">site ↗</a>` : "",
+  ].filter(Boolean).join(" · ");
+  return `<tr class="detail"><td colspan="13">
+    <div class="breakdown">
+      <span class="dim">holder momentum</span>${bar(sc.holder, 40)}<span>${sc.holder}/40</span>
+      <span class="dim">volume momentum</span>${bar(sc.volume, 40)}<span>${sc.volume}/40</span>
+      <span class="dim">confirmation</span>${bar(sc.confirmation, 20)}<span>${sc.confirmation}/20</span>
+      <span class="dim">risk penalty</span>${bar(sc.penalty, 40, true)}<span>${sc.penalty}</span>
+    </div>
+    <ul class="reasons">${blockers}${reasons || "<li>no notable signals yet</li>"}</ul>
+    <div class="dim">${esc(t.address)} · source: ${t.source}${t.launchpad ? " · " + esc(t.launchpad) : ""} · ${links}</div>
+  </td></tr>`;
+}
+
+document.addEventListener("click", (e) => {
+  const tab = e.target.closest(".tab");
+  if (tab) {
+    document.querySelectorAll(".tab").forEach((el) => el.classList.remove("active"));
+    tab.classList.add("active");
+    filter = tab.dataset.f;
+    render();
+    return;
+  }
+  const row = e.target.closest("tr.row");
+  if (row) {
+    const a = row.dataset.a;
+    expanded.has(a) ? expanded.delete(a) : expanded.add(a);
+    render();
+  }
+});
+$("search").addEventListener("input", render);
+
+async function refresh() {
+  try {
+    const res = await fetch("/api/state");
+    state = await res.json();
+    render();
+  } catch (err) {
+    $("err").style.display = "block";
+    $("err").textContent = "Dashboard can't reach the screener process: " + err;
+  }
+}
+refresh();
+setInterval(refresh, 10_000);
+</script>
+</body>
+</html>
