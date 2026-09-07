@@ -119,6 +119,37 @@ lists everything that passed the gates in rank order; *Fresh launches* narrows
 that to curve-phase and under-an-hour tokens (tagged CURVE / NEW). Rows link
 straight to the token's gmgn.ai page.
 
+## Hosting it (always-on)
+
+The screener is a long-running process: it polls GMGN every 30 seconds and
+keeps minutes of history in memory to compute the deltas. It therefore needs a
+host that keeps one process alive. **It cannot run on Vercel, Netlify or other
+serverless platforms**: those run your code only for the instant a page is
+requested and forget everything in between, so the deltas can never form
+(and the function crashes at startup when no `GMGN_API_KEY` is present).
+
+Any host that runs a Docker container or a Node process works. Two easy ones:
+
+**Render (free tier).** Click the button, sign in with GitHub, paste your GMGN
+API key when asked, deploy.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Jbusiness0810/gmgn_tool)
+
+The free instance goes to sleep after 15 minutes without visitors, and polling
+stops while it sleeps. A free uptime pinger (for example UptimeRobot hitting
+`https://<your-app>.onrender.com/healthz` every 5 minutes) keeps it awake.
+Paid instances don't sleep.
+
+**Railway (about $5/month, never sleeps).** New Project → Deploy from GitHub
+repo → pick this repo (the `Dockerfile` is detected automatically) → Variables
+→ add `GMGN_API_KEY` → Settings → Networking → Generate Domain.
+
+Notes for any host: set `GMGN_API_KEY` as an environment variable in the
+host's dashboard, never in git; the app listens on the `PORT` the host injects;
+`data/` (history and alert log) lives on the instance's disk, so a restart
+starts with an empty history and rebuilds it within ten minutes; and the
+dashboard has no login, so anyone who has the URL can view it.
+
 ## Configuration
 
 All via `.env` (see [.env.example](.env.example)):
@@ -166,3 +197,4 @@ public/index.html       the dashboard (vanilla JS, zero deps)
 
 Zero runtime dependencies — Node ≥ 18.17 (built-in `fetch`), `tsx` to run
 TypeScript directly. `npm run typecheck` for the strict `tsc` pass.
+`Dockerfile` + `render.yaml` package it for always-on hosts (see above).

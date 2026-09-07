@@ -1,0 +1,16 @@
+# Render Blueprint: https://render.com/deploy?repo=https://github.com/Jbusiness0810/gmgn_tool
+# Render asks for GMGN_API_KEY at deploy time (sync: false) and never stores it in git.
+services:
+  - type: web
+    name: gmgn-screener
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: GMGN_API_KEY
+        sync: false
+      - key: CHAIN
+        value: sol
+      - key: POLL_INTERVAL_SEC
+        value: "30"
