@@ -6,10 +6,16 @@ import type { GmgnDataSource, RawRankToken, TrenchesData } from "./types.js";
  *
  * Auth: X-APIKEY header + `timestamp` (unix seconds, server allows ±5s skew) and
  * `client_id` (fresh UUID per request) query params. Responses are wrapped in a
- * `{ code, data, message, error }` envelope; code 0 = success.
+ * `{ code, data, message, error }` envelope; code 0 = success. Some routes
+ * (market/rank) wrap the payload twice — `{code, data: {code, data: {rank}}}` —
+ * so `unwrap()` peels envelopes until it reaches the payload.
  *
- * Rate limits: leaky bucket, rate=20 capacity=20; route weights: rank=1,
- * trenches=3. The client spaces requests and honours 429 `x-ratelimit-reset`.
+ * Rate limits (measured on the free tier, Sep 2026): ~1 request/second
+ * sustained with a burst of about 3. Faster than that answers 429
+ * RATE_LIMIT_EXCEEDED, and repeated violations answer RATE_LIMIT_BANNED with a
+ * ~60s `reset_at` (unix seconds) in the body. There are no x-ratelimit-*
+ * headers. The client spaces requests 2s apart, pauses until `reset_at` on a
+ * 429, and retries at most once per request.
  */
 
 interface Envelope {
@@ -17,6 +23,7 @@ interface Envelope {
   data?: unknown;
   message?: string;
   error?: string;
+  reset_at?: number | string;
 }
 
 export class GmgnApiError extends Error {
@@ -31,8 +38,10 @@ export class GmgnApiError extends Error {
   }
 }
 
-const MIN_REQUEST_SPACING_MS = 250; // ≈4 req/s, far under the 20/s bucket
-const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+const MIN_REQUEST_SPACING_MS = 2_000;           // free tier: ~1 req/s sustained, tiny burst
+const RATE_LIMIT_EXCEEDED_PAUSE_MS = 10_000;    // fallback when a 429 carries no reset_at
+const RATE_LIMIT_BANNED_PAUSE_MS = 65_000;
+const MAX_RATE_LIMIT_WAIT_MS = 90_000;          // wait through one ban, never longer
 
 export class GmgnClient implements GmgnDataSource {
   private lastRequestAt = 0;
@@ -128,24 +137,22 @@ export class GmgnClient implements GmgnDataSource {
         );
       }
 
-      if (json.code === 0) return json.data;
+      if (toNum(json.code) === 0) return unwrap(json, method, subPath);
 
-      const resetHeader = Number.parseInt(res.headers.get("x-ratelimit-reset") ?? "", 10);
-      const resetAt = Number.isFinite(resetHeader) && resetHeader > 0 ? resetHeader : undefined;
       const rateLimited = json.error === "RATE_LIMIT_EXCEEDED" || json.error === "RATE_LIMIT_BANNED";
+      const resetAt = toNum(json.reset_at) ?? toNum(res.headers.get("x-ratelimit-reset"));
 
-      if (rateLimited && resetAt && attempt === 1) {
-        // Back off until the bucket resets (+1s buffer), then retry once. Hammering
-        // during a ban extends it by 5s per request, so never retry more than once.
-        const waitMs = Math.max(resetAt * 1000 - Date.now(), 0) + 1000;
-        if (waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
-          this.pausedUntil = Date.now() + waitMs;
-          console.warn(`[gmgn] rate limited on ${subPath}; retrying in ${Math.ceil(waitMs / 1000)}s`);
+      if (rateLimited) {
+        // Pause everything until the server says the bucket resets (+1s buffer).
+        // Hammering during a ban extends it, so never retry more than once.
+        const fallback = json.error === "RATE_LIMIT_BANNED" ? RATE_LIMIT_BANNED_PAUSE_MS : RATE_LIMIT_EXCEEDED_PAUSE_MS;
+        const waitMs = Math.max(resetAt != null ? resetAt * 1000 - Date.now() : 0, fallback) + 1000;
+        this.pausedUntil = Math.max(this.pausedUntil, Date.now() + waitMs);
+        if (attempt === 1 && waitMs <= MAX_RATE_LIMIT_WAIT_MS) {
+          console.warn(`[gmgn] ${json.error} on ${subPath}; retrying in ${Math.ceil(waitMs / 1000)}s`);
           continue;
         }
       }
-
-      if (rateLimited) this.pausedUntil = Math.max(this.pausedUntil, (resetAt ?? 0) * 1000);
 
       throw new GmgnApiError(
         `${method} ${subPath} failed: HTTP ${res.status} code=${json.code}` +
@@ -153,7 +160,7 @@ export class GmgnClient implements GmgnDataSource {
           (json.message ? ` message=${json.message}` : ""),
         res.status,
         json.error,
-        resetAt
+        resetAt ?? undefined
       );
     }
   }
@@ -167,6 +174,26 @@ export class GmgnClient implements GmgnDataSource {
     const wait = Math.max(0, ...waits);
     if (wait > 0) await sleep(wait);
   }
+}
+
+/** Peel nested `{code, data}` envelopes; a non-zero inner code is an API error. */
+function unwrap(json: Envelope, method: string, subPath: string): unknown {
+  let data = json.data;
+  while (isEnvelope(data)) {
+    if (toNum(data.code) !== 0) {
+      throw new GmgnApiError(
+        `${method} ${subPath} failed: inner code=${data.code}` + (data.message ? ` message=${data.message}` : ""),
+        200,
+        String(data.code)
+      );
+    }
+    data = data.data;
+  }
+  return data;
+}
+
+function isEnvelope(v: unknown): v is Envelope {
+  return typeof v === "object" && v !== null && "code" in v && "data" in v;
 }
 
 // ---- coercion helpers used across the screener ----

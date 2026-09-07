@@ -25,6 +25,7 @@ export class ScreenerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private cycleCount = 0;
+  private inFlight = false;
   lastCycleAt: number | null = null;
   lastError: string | null = null;
 
@@ -51,6 +52,8 @@ export class ScreenerEngine {
    * pre-populate history (holder deltas need ≥3.5 min of snapshots).
    */
   async cycle(nowOverride?: number): Promise<void> {
+    if (this.inFlight) return; // a rate-limit pause can outlast the poll interval; never stack cycles
+    this.inFlight = true;
     const now = nowOverride ?? Date.now();
     try {
       const fetched = await this.fetchAll();
@@ -67,20 +70,25 @@ export class ScreenerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       console.error(`[screener] cycle failed: ${this.lastError}`);
+    } finally {
+      this.inFlight = false;
     }
   }
 
   private async fetchAll(): Promise<CycleFetch> {
     const { chain } = this.cfg;
-    // Weight budget/cycle: 3×rank(1) + 1×trenches(3) = 6 of a 20/s bucket — safe
-    // at any poll interval ≥10s. Requests are serialized inside the client.
+    // 4 requests per cycle, serialized and spaced 2s apart inside the client
+    // (free tier tolerates ~1 req/s), so a cycle takes ~8s of API time.
     const rank1m = await this.source.trendingRank(chain, "1m", { limit: 100 });
     const rank5m = await this.source.trendingRank(chain, "5m", { limit: 100 });
     const rank1h = await this.source.trendingRank(chain, "1h", { limit: 100 });
     const trenchData = await this.source.trenches(chain, ["near_completion", "completed"], 50, {
       min_holder_count: Math.max(1, Math.floor(this.cfg.minHolders / 2)),
     });
-    const trench = [...(trenchData.pump ?? []), ...(trenchData.completed ?? [])];
+    const trench = [
+      ...(trenchData.near_completion ?? trenchData.pump ?? []),
+      ...(trenchData.completed ?? []),
+    ];
     return { rank1m, rank5m, rank1h, trench };
   }
 
@@ -129,8 +137,8 @@ export class ScreenerEngine {
         swaps5m: null,
         buys5m: toNum(raw.buys),
         sells5m: toNum(raw.sells),
-        price: null,
-        marketCap: toNum(raw.usd_market_cap),
+        price: toNum(raw.price),
+        marketCap: toNum(raw.usd_market_cap) ?? toNum(raw.market_cap),
         liquidity: toNum(raw.liquidity),
       };
       this.upsert(address, trenchFacts(raw, this.cfg.chain), snapshot, now);
@@ -375,6 +383,7 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     smartMoney: toNum(raw.smart_degen_count),
     kols: toNum(raw.renowned_count),
     hotLevel: toNum(raw.hot_level),
+    botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
     washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
     honeypot: raw.is_honeypot == null ? null : toNum(raw.is_honeypot) === 1,
@@ -414,17 +423,18 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     smartMoney: toNum(raw.smart_degen_count),
     kols: toNum(raw.renowned_count),
     hotLevel: null,
+    botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
-    washTrading: null,
+    washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
     honeypot: null,
-    top10Rate: toNum(raw.top_holder_rate),
-    bundlerRate: toNum(raw.bundler_rate),
-    insiderRate: toNum(raw.insider_ratio),
-    devHoldRate: null,
-    sniperHoldRate: null,
+    top10Rate: toNum(raw.top_holder_rate) ?? toNum(raw.top_10_holder_rate),
+    bundlerRate: toNum(raw.bundler_rate) ?? toNum(raw.bundler_trader_amount_rate),
+    insiderRate: toNum(raw.insider_ratio) ?? toNum(raw.rat_trader_amount_rate),
+    devHoldRate: toNum(raw.dev_team_hold_rate),
+    sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
-    mintRenounced: null,
-    freezeRenounced: null,
+    mintRenounced: renounced(raw.renounced_mint),
+    freezeRenounced: renounced(raw.renounced_freeze_account),
     twitter: null,
     website: null,
   };

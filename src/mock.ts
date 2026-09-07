@@ -277,7 +277,7 @@ export class MockSource implements GmgnDataSource {
         sells: 18,
       },
     ];
-    return { pump: early, completed: [] };
+    return { near_completion: early, completed: [] };
   }
 
   private rankRow(p: Profile, seed: number, chain: string, interval: string, now: number): RawRankToken {
@@ -331,6 +331,7 @@ export class MockSource implements GmgnDataSource {
       creator_token_status: seed % 3 ? "creator_close" : "creator_hold",
       smart_degen_count: p.smartMoney ?? 0,
       renowned_count: p.kols ?? 0,
+      bot_degen_rate: 0.2 + (seed % 4) * 0.05,
       twitter_username: `${p.symbol.toLowerCase()}_coin`,
       website: null,
       ...p.risk,

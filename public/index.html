@@ -158,7 +158,7 @@
   Screener methodology: momentum (0–80) is an OR-blend of holder Δ (0–40, holder velocity
   &amp; growth over ~5m) and volume Δ (0–40, 1m/5m volume vs the token's own 1h average, or vs
   the previous 5m), so one strong delta is enough to rank; + confirmation (−4–20: buy pressure,
-  price, smart money) − penalties (holders draining, near-gate supply concentration, youth).
+  price, smart money) − penalties (holders draining, bot-heavy activity, near-gate supply concentration, youth).
   Hard gates block outright: rug ratio, wash trading, honeypot, liquidity, holder count, and
   supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority).
   Data: GMGN.ai OpenAPI.
@@ -328,7 +328,7 @@ function detailRow(t) {
     <div class="dim" style="margin-bottom:4px">supply control: top-10 ${pctOr(t.top10Rate)} (gate ${pctOr(th.maxTop10Rate)})
       · bundlers ${pctOr(t.bundlerRate)} (gate ${pctOr(th.maxBundlerRate)})
       · insiders ${pctOr(t.insiderRate)} (gate ${pctOr(th.maxInsiderRate)})
-      · dev ${pctOr(t.devHoldRate)} · snipers ${pctOr(t.sniperHoldRate)}
+      · dev ${pctOr(t.devHoldRate)} · snipers ${pctOr(t.sniperHoldRate)} · bots ${pctOr(t.botRate)}
       · controlled ≈${pctOr(t.controlledSupply)} (gate ${pctOr(th.maxControlledSupply)})
       · mint ${auth(t.mintRenounced)} · freeze ${auth(t.freezeRenounced)}</div>
     <div class="dim">${esc(t.address)} · source: ${t.source}${t.launchpad ? " · " + esc(t.launchpad) : ""} · ${links}</div>

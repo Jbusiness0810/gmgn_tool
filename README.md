@@ -55,8 +55,11 @@ is correct, disable IPv6 on your interface.
 Every `POLL_INTERVAL_SEC` (default 30s) the engine:
 
 1. **Fetches** `GET /v1/market/rank` at three intervals (`1m`, `5m`, `1h`) plus
-   `POST /v1/trenches` (near-completion + freshly graduated launchpad tokens),
-   ~6 rate-limit weight per cycle against a 20/s bucket.
+   `POST /v1/trenches` (near-completion + freshly graduated launchpad tokens):
+   4 requests per cycle, spaced 2s apart. The free tier allows roughly one
+   request per second with a burst of about three; faster than that answers
+   429 and repeated violations ban the key for about a minute. The client
+   honours the `reset_at` in a 429 body and never stacks overlapping cycles.
 2. **Snapshots** every token: holders, per-interval USD volume, buys/sells,
    price, market cap, liquidity. History is kept for 3h (persisted to
    `data/state.json`, so restarts don't lose the deltas).
@@ -79,7 +82,7 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
    | Volume Δ | 0–40 | 1m & 5m volume vs own 1h average (default 3× = full) **or** 5m volume vs the previous 5m; absolute-volume floor |
    | Momentum | 0–80 | `1.6 × max(holderΔ, volumeΔ) + 0.4 × min(…)`: one full-strength delta scores 64, both score 80 |
    | Confirmation | −4–20 | buy ratio > 50%, positive 5m price, smart-money & KOL wallets |
-   | Penalties | ≤ 0 | holders draining, supply concentration approaching a gate (top-10, bundlers, insiders, dev, snipers), extreme youth |
+   | Penalties | ≤ 0 | holders draining, bot-heavy activity (`bot_degen_rate` above 50%: bot wallets count as holders too), supply concentration approaching a gate (top-10, bundlers, insiders, dev, snipers), extreme youth |
 
    Ranking order is status, then score, then momentum, then the single
    strongest delta as a multiple of its target, so among equal scores the

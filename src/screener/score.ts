@@ -13,8 +13,8 @@ import type { ScoreBreakdown, Signals, Snapshot, TokenFacts } from "./model.js";
  *                            OR trailing-5m volume vs the 5m before it
  *   momentum          0–80   1.6 × max(holder, volume) + 0.4 × min(holder, volume)
  *   confirmation     −4–20   buy ratio, 5m price move, smart money / KOLs
- *   penalties         ≤ 0    holders draining, concentration, bundlers, insiders,
- *                            dev overhang, snipers, extreme youth
+ *   penalties         ≤ 0    holders draining, bot-driven activity, concentration,
+ *                            bundlers, insiders, dev overhang, snipers, extreme youth
  *
  * Hard gates (supply control, rug/wash/honeypot, liquidity, holder count) zero
  * the score and mark the token blocked, no matter how fast it is moving.
@@ -99,6 +99,9 @@ export function scoreToken(
   };
   pen(ramp(signals.holderPct5m == null ? null : -signals.holderPct5m, 0.02, 0.10, 10),
     `holders draining: ${signals.holderDelta5m} in ${signals.minutesCovered?.toFixed(0)}m`);
+  // Bot wallets show up as holders too: holder growth on a bot-heavy token is
+  // partly fake. Live median is ~40%, so only the bot-dominated tail is docked.
+  pen(ramp(facts.botRate, 0.5, 0.8, 8), `${pct(facts.botRate)} of activity is bot wallets`);
   pen(ramp(facts.top10Rate, 0.20, cfg.maxTop10Rate, 8), `top-10 hold ${pct(facts.top10Rate)}`);
   pen(ramp(facts.bundlerRate, 0.10, cfg.maxBundlerRate, 10), `bundled supply ${pct(facts.bundlerRate)}`);
   pen(ramp(facts.insiderRate, 0.05, cfg.maxInsiderRate, 8), `insiders hold ${pct(facts.insiderRate)}`);

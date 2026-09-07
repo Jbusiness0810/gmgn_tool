@@ -29,6 +29,7 @@ export interface TokenFacts {
   smartMoney: number | null;
   kols: number | null;
   hotLevel: number | null;
+  botRate: number | null;   // share of activity from bot wallets; inflates holder counts
 
   rugRatio: number | null;
   washTrading: boolean | null;
