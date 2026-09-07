@@ -74,7 +74,7 @@
 
   .sym { font-weight: 700; }
   .name { color: var(--faint); font-size: 11px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
-  .pos { color: var(--green); } .neg { color: var(--red); } .dim { color: var(--dim); }
+  .pos { color: var(--green); } .neg { color: var(--red); } .dim { color: var(--dim); } .warn { color: var(--amber); }
 
   .status { font-size: 10px; padding: 2px 7px; border-radius: 9px; font-weight: 700; letter-spacing: .5px; }
   .status.flagged { background: #16351c; color: var(--green); border: 1px solid #2c5a33; }
@@ -128,7 +128,7 @@
 
     <div class="controls">
       <div class="tab active" data-f="hot">Flagged + Watch</div>
-      <div class="tab" data-f="all">All</div>
+      <div class="tab" data-f="ranked">Ranked</div>
       <div class="tab" data-f="flagged">Flagged</div>
       <div class="tab" data-f="blocked">Blocked</div>
       <input id="search" placeholder="filter symbol / address…">
@@ -141,7 +141,7 @@
         <th>Holders</th><th>Δ Holders (5m)</th>
         <th>Vol 1m</th><th>Vol Δ (vs 1h avg)</th>
         <th>Buys 5m</th><th>Price 5m</th>
-        <th>MC</th><th>Liq</th><th>Smart $</th><th>Age</th>
+        <th>MC</th><th>Liq</th><th>Smart $</th><th>Supply</th><th>Age</th>
       </tr></thead>
       <tbody id="rows"></tbody>
     </table>
@@ -155,10 +155,13 @@
 </div>
 
 <footer>
-  Screener methodology: score = holder momentum (0–40, holder velocity &amp; growth over ~5m)
-  + volume momentum (0–40, 1m/5m volume vs the token's own 1h average) + confirmation (0–20,
-  buy pressure, price, smart money) − risk penalties; hard gates (rug ratio, wash trading,
-  honeypot, concentration, liquidity) block outright. Data: GMGN.ai OpenAPI.
+  Screener methodology: momentum (0–80) is an OR-blend of holder Δ (0–40, holder velocity
+  &amp; growth over ~5m) and volume Δ (0–40, 1m/5m volume vs the token's own 1h average, or vs
+  the previous 5m), so one strong delta is enough to rank; + confirmation (−4–20: buy pressure,
+  price, smart money) − penalties (holders draining, near-gate supply concentration, youth).
+  Hard gates block outright: rug ratio, wash trading, honeypot, liquidity, holder count, and
+  supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority).
+  Data: GMGN.ai OpenAPI.
   <br><br>⚠ This is a research/screening tool, not financial advice. Meme-token trading is
   extremely high risk; flagged ≠ safe. Always do your own due diligence.
 </footer>
@@ -216,7 +219,7 @@ function sparkline(values, w = 72, h = 20) {
 function matches(t) {
   const q = $("search").value.trim().toLowerCase();
   if (q && !t.symbol.toLowerCase().includes(q) && !t.address.toLowerCase().includes(q)) return false;
-  if (filter === "all") return true;
+  if (filter === "ranked") return t.status !== "blocked";
   if (filter === "hot") return t.status === "flagged" || t.status === "watch";
   return t.status === filter;
 }
@@ -224,6 +227,26 @@ function matches(t) {
 function scoreCell(score) {
   const cls = score.total >= 70 ? "" : score.total >= 50 ? "mid" : "low";
   return `<span class="scorebar"><i class="${cls}" style="width:${score.total}%"></i></span><b>${score.total.toFixed(0)}</b>`;
+}
+
+function pctOr(v) {
+  return v == null ? "—" : Math.round(v * 100) + "%";
+}
+
+// Compact supply-control read-out: top-10 / bundlers / insiders, red when over
+// the hard gate, amber when within 60% of it.
+function supplyCell(t) {
+  const th = state.thresholds || {};
+  const item = (label, v, max) => {
+    if (v == null) return `<span class="dim">${label} —</span>`;
+    const cls = max != null && v > max ? "neg" : max != null && v >= max * 0.6 ? "warn" : "";
+    return `<span class="${cls}" title="${label === "T10" ? "top-10 holders" : label === "B" ? "bundled supply" : "insider-held supply"}">${label} ${pctOr(v)}</span>`;
+  };
+  return [
+    item("T10", t.top10Rate, th.maxTop10Rate),
+    item("B", t.bundlerRate, th.maxBundlerRate),
+    item("I", t.insiderRate, th.maxInsiderRate),
+  ].join(' <span class="dim">·</span> ');
 }
 
 function render() {
@@ -260,11 +283,12 @@ function render() {
       <td>${fmtUsd(l.marketCap)}</td>
       <td>${fmtUsd(l.liquidity)}</td>
       <td>${t.smartMoney ?? "—"}${t.kols ? ' <span class="dim">+' + t.kols + ' KOL</span>' : ""}</td>
+      <td>${supplyCell(t)}</td>
       <td class="dim">${fmtAge(t.createdAt)}</td>
     </tr>`);
     if (expanded.has(t.address)) rows.push(detailRow(t));
   }
-  $("rows").innerHTML = rows.join("") || '<tr><td colspan="13" class="dim">no tokens match</td></tr>';
+  $("rows").innerHTML = rows.join("") || '<tr><td colspan="14" class="dim">no tokens match</td></tr>';
 
   $("alerts").innerHTML = (state.alerts || []).length
     ? state.alerts.map((a) => `<div class="alert">
@@ -288,14 +312,25 @@ function detailRow(t) {
     t.twitter ? `<a href="https://x.com/${esc(t.twitter)}" target="_blank" rel="noopener">@${esc(t.twitter)} ↗</a>` : "",
     t.website ? `<a href="${esc(t.website)}" target="_blank" rel="noopener">site ↗</a>` : "",
   ].filter(Boolean).join(" · ");
-  return `<tr class="detail"><td colspan="13">
+  const th = state.thresholds || {};
+  const auth = (ok) => ok === true ? '<span class="pos">renounced</span>' : ok === false ? '<span class="neg">LIVE</span>' : '<span class="dim">unknown</span>';
+  const momentum = sc.momentum ?? 0, intensity = sc.intensity ?? 0;
+  return `<tr class="detail"><td colspan="14">
     <div class="breakdown">
-      <span class="dim">holder momentum</span>${bar(sc.holder, 40)}<span>${sc.holder}/40</span>
-      <span class="dim">volume momentum</span>${bar(sc.volume, 40)}<span>${sc.volume}/40</span>
+      <span class="dim">holder Δ</span>${bar(sc.holder, 40)}<span>${sc.holder}/40</span>
+      <span class="dim">volume Δ</span>${bar(sc.volume, 40)}<span>${sc.volume}/40</span>
+      <span class="dim">momentum (OR)</span>${bar(momentum, 80)}<span>${momentum}/80</span>
       <span class="dim">confirmation</span>${bar(sc.confirmation, 20)}<span>${sc.confirmation}/20</span>
       <span class="dim">risk penalty</span>${bar(sc.penalty, 40, true)}<span>${sc.penalty}</span>
     </div>
+    <div class="dim" style="margin-bottom:6px">strongest delta: ${intensity.toFixed(1)}× its target</div>
     <ul class="reasons">${blockers}${reasons || "<li>no notable signals yet</li>"}</ul>
+    <div class="dim" style="margin-bottom:4px">supply control: top-10 ${pctOr(t.top10Rate)} (gate ${pctOr(th.maxTop10Rate)})
+      · bundlers ${pctOr(t.bundlerRate)} (gate ${pctOr(th.maxBundlerRate)})
+      · insiders ${pctOr(t.insiderRate)} (gate ${pctOr(th.maxInsiderRate)})
+      · dev ${pctOr(t.devHoldRate)} · snipers ${pctOr(t.sniperHoldRate)}
+      · controlled ≈${pctOr(t.controlledSupply)} (gate ${pctOr(th.maxControlledSupply)})
+      · mint ${auth(t.mintRenounced)} · freeze ${auth(t.freezeRenounced)}</div>
     <div class="dim">${esc(t.address)} · source: ${t.source}${t.launchpad ? " · " + esc(t.launchpad) : ""} · ${links}</div>
   </td></tr>`;
 }

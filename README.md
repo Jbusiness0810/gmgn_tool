@@ -5,8 +5,8 @@ signals that most often precede a run: **rapid holder growth** and **volume
 acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
 computes the deltas itself (GMGN only serves point-in-time snapshots), scores
 every token 0–100, and raises an alert when one crosses the flag threshold —
-with hard risk gates so rugs, honeypots and wash-traded tokens never get flagged
-no matter how fast they move.
+with hard risk gates so rugs, honeypots, wash-traded and bundled or
+supply-controlled tokens never get flagged no matter how fast they move.
 
 ![status](https://img.shields.io/badge/data-GMGN.ai%20OpenAPI-6ce675)
 
@@ -61,24 +61,40 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
    price, market cap, liquidity. History is kept for 3h (persisted to
    `data/state.json`, so restarts don't lose the deltas).
 3. **Computes deltas** per token:
-   - *Holder velocity* — holders gained per minute over the last ~5 minutes,
+   - *Holder velocity*: holders gained per minute over the last ~5 minutes,
      plus *acceleration* (recent 5m velocity vs the 5m before it).
-   - *Volume ratio* — trailing 1m (and 5m) volume vs the token's **own** 1h
+   - *Volume ratio*: trailing 1m (and 5m) volume vs the token's **own** 1h
      average: `vol_1m ÷ (vol_1h / 60)`. A token doing 3× its own baseline is
      heating up regardless of its absolute size.
-   - *Buy pressure* — buys ÷ total swaps over the trailing 5m.
-4. **Scores** 0–100 (weighting follows the "holder + volume delta first" brief):
+   - *Volume growth*: trailing 5m volume vs the 5m before it. Catches a ramp
+     that starts inside an already-busy hour, where the 1h baseline is high
+     and the ratio above looks tame.
+   - *Buy pressure*: buys ÷ total swaps over the trailing 5m.
+4. **Scores** 0–100. The two deltas are blended **OR-style**: one strong
+   recent delta is enough to rank near the top; both together rank highest.
 
    | Component | Points | Driven by |
    |---|---|---|
-   | Holder momentum | 0–40 | velocity vs target (default 10/min = full), % growth, acceleration bonus |
-   | Volume momentum | 0–40 | 1m & 5m volume vs own 1h average (default 3× = full), absolute-volume floor |
+   | Holder Δ | 0–40 | velocity vs target (default 10/min = full), % growth, acceleration bonus |
+   | Volume Δ | 0–40 | 1m & 5m volume vs own 1h average (default 3× = full) **or** 5m volume vs the previous 5m; absolute-volume floor |
+   | Momentum | 0–80 | `1.6 × max(holderΔ, volumeΔ) + 0.4 × min(…)`: one full-strength delta scores 64, both score 80 |
    | Confirmation | −4–20 | buy ratio > 50%, positive 5m price, smart-money & KOL wallets |
-   | Risk penalties | ≤ 0 | bundlers, insiders, top-10 concentration, dev overhang, snipers, extreme youth |
+   | Penalties | ≤ 0 | holders draining, supply concentration approaching a gate (top-10, bundlers, insiders, dev, snipers), extreme youth |
 
-5. **Gates** (hard blocks, from GMGN's own screening guidance): `rug_ratio` >
-   0.3, wash trading, honeypot, top-10 holders > 50%, liquidity < $10k, < 25
-   holders. Blocked tokens show in the dashboard with the reason, score 0.
+   Ranking order is status, then score, then momentum, then the single
+   strongest delta as a multiple of its target, so among equal scores the
+   biggest mover leads.
+
+5. **Gates**: hard blocks with score 0, never flagged however fast they move.
+   Blocked tokens sit under the dashboard's *Blocked* tab with the reason.
+   - *Rug / manipulation:* `rug_ratio` > 0.3, wash trading, honeypot.
+   - *Size:* liquidity < $10k, < 25 holders.
+   - *Bundled or supply-controlled* (any one trips it; an unknown value never
+     blocks): top-10 holders > 30% (GMGN's own "relatively safe" line),
+     bundled supply > 25%, insider-held supply > 20% (wallets that hold
+     without ever having bought after open), dev/team > 10%, snipers > 40%,
+     bundlers + insiders + dev combined > 40%, and a mint or freeze authority
+     that is still live (supply can be inflated / holders frozen).
 6. **Flags** a token when it scores ≥ `FLAG_SCORE` (default 70) for **2
    consecutive cycles** (debounce against one-tick spikes); ≥ `WATCH_SCORE`
    (default 50) marks it *watch*. Flag events print to the console, append to
@@ -88,8 +104,11 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
 
 The dashboard (http://localhost:4477) shows flagged/watch tokens with holder and
 volume sparklines, Δholders/5m, volume-vs-baseline multiple, buy %, market cap,
-liquidity, smart-money count, and a click-to-expand score breakdown with every
-reason and blocker. Rows link straight to the token's gmgn.ai page.
+liquidity, smart-money count, a supply column (top-10 / bundled / insider share:
+amber near a gate, red over it), and a click-to-expand score breakdown with
+every reason, blocker and the full supply-control read-out. The *Ranked* tab
+lists everything that passed the gates in rank order. Rows link straight to
+the token's gmgn.ai page.
 
 ## Configuration
 
@@ -105,11 +124,19 @@ All via `.env` (see [.env.example](.env.example)):
 | `HOLDER_VEL_TARGET` | `10` | holders/min that earns full holder points |
 | `VOL_RATIO_TARGET` | `3` | volume-vs-1h-average multiple for full points |
 | `MIN_LIQUIDITY_USD` / `MIN_HOLDERS` | `10000` / `25` | hard gates |
-| `MAX_RUG_RATIO` / `MAX_TOP10_RATE` | `0.3` / `0.5` | hard gates |
+| `MAX_RUG_RATIO` | `0.3` | hard gate |
+| `MAX_TOP10_RATE` | `0.3` | supply gate: top-10 holders' share |
+| `MAX_BUNDLER_RATE` | `0.25` | supply gate: launch-bundle wallets' share |
+| `MAX_INSIDER_RATE` | `0.2` | supply gate: insider-held share |
+| `MAX_DEV_HOLD_RATE` | `0.1` | supply gate: dev/team share |
+| `MAX_SNIPER_HOLD_RATE` | `0.4` | supply gate: sniper-held share |
+| `MAX_CONTROLLED_SUPPLY` | `0.4` | supply gate: bundlers + insiders + dev combined |
+| `REQUIRE_RENOUNCED` | `1` | block while mint/freeze authority is live (set `0` if GMGN reports `0` for every token on your chain) |
 | `ALERT_WEBHOOK_URL` | — | optional webhook for flag alerts |
 
 Tune the two targets to taste: lower them on quiet days to surface more, raise
-them in a frenzy to only see the outliers.
+them in a frenzy to only see the outliers. Loosen the supply gates if too much
+gets blocked; the *Blocked* tab shows exactly which gate tripped for each token.
 
 ## Project layout
 

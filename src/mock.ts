@@ -7,7 +7,10 @@ import type { GmgnDataSource, RawRankToken, RawTrenchToken, TrenchesData } from 
  * timestamps (backfill) and live polling produce one consistent trajectory:
  *  - "surgers" start a holder/volume ramp a few minutes before launch, so the
  *    screener visibly catches them climbing from tracking → watch → flagged;
- *  - "risky" tokens carry rug/wash/concentration signals and stay blocked;
+ *    two of them move on ONE signal only (holders-only / volume-only) to show
+ *    the OR-style ranking;
+ *  - "risky" tokens carry rug/wash/bundle/insider/mint-authority signals and
+ *    stay blocked however fast they move;
  *  - the rest jitter around a baseline.
  */
 
@@ -77,7 +80,79 @@ const PROFILES: Profile[] = [
     kols: 2,
     buyBias: 0.61,
   },
+  // --- single-signal surgers: one strong delta should be enough to rank ---
+  {
+    address: "MockHoldersOnlySurge9999999999999999999999999",
+    symbol: "HODLR",
+    name: "holders only, flat volume",
+    createdAgoMin: 70,
+    baseHolders: 380,
+    baseVolPerMin: 700,
+    liquidity: 58_000,
+    marketCap: 410_000,
+    price: 0.00041,
+    surge: { startAgoMin: 7, holdersPerMin: 16, volMultiple: 1 },
+    smartMoney: 1,
+    buyBias: 0.55,
+  },
+  {
+    address: "MockVolumeOnlySurge8888888888888888888888888",
+    symbol: "VOLUP",
+    name: "volume only, flat holders",
+    createdAgoMin: 160,
+    baseHolders: 900,
+    baseVolPerMin: 1_100,
+    liquidity: 97_000,
+    marketCap: 780_000,
+    price: 0.00078,
+    surge: { startAgoMin: 5, holdersPerMin: 0, volMultiple: 6 },
+    smartMoney: 2,
+    buyBias: 0.58,
+  },
   // --- risky: momentum but hard-gated ---
+  {
+    address: "MockBundledLaunch1010101010101010101010101010",
+    symbol: "BUNDL",
+    name: "bundled launch",
+    createdAgoMin: 35,
+    baseHolders: 290,
+    baseVolPerMin: 1_300,
+    liquidity: 61_000,
+    marketCap: 520_000,
+    price: 0.00052,
+    surge: { startAgoMin: 7, holdersPerMin: 13, volMultiple: 5 },
+    risk: { bundler_rate: 0.38, top_10_holder_rate: 0.27 },
+    smartMoney: 2,
+    buyBias: 0.7,
+  },
+  {
+    address: "MockInsiderSupply2020202020202020202020202020",
+    symbol: "INSDR",
+    name: "insider distribution",
+    createdAgoMin: 50,
+    baseHolders: 340,
+    baseVolPerMin: 1_000,
+    liquidity: 49_000,
+    marketCap: 460_000,
+    price: 0.00046,
+    surge: { startAgoMin: 6, holdersPerMin: 10, volMultiple: 4 },
+    risk: { rat_trader_amount_rate: 0.27, dev_team_hold_rate: 0.08 },
+    buyBias: 0.63,
+  },
+  {
+    address: "MockMintAuthority303030303030303030303030303",
+    symbol: "MINTY",
+    name: "mint authority still live",
+    createdAgoMin: 80,
+    baseHolders: 510,
+    baseVolPerMin: 800,
+    liquidity: 70_000,
+    marketCap: 590_000,
+    price: 0.00059,
+    surge: { startAgoMin: 8, holdersPerMin: 9, volMultiple: 3.5 },
+    risk: { renounced_mint: 0 },
+    buyBias: 0.6,
+  },
   {
     address: "MockRugCandidate44444444444444444444444444444",
     symbol: "SAFEMOON2",
@@ -251,6 +326,8 @@ export class MockSource implements GmgnDataSource {
       bundler_rate: 0.05,
       rat_trader_amount_rate: 0.04,
       dev_team_hold_rate: 0.02,
+      renounced_mint: 1,
+      renounced_freeze_account: 1,
       creator_token_status: seed % 3 ? "creator_close" : "creator_hold",
       smart_degen_count: p.smartMoney ?? 0,
       renowned_count: p.kols ?? 0,

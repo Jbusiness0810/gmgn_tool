@@ -33,6 +33,12 @@ function str(name: string, fallback: string): string {
   return raw === undefined || raw === "" ? fallback : raw;
 }
 
+function bool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  return !["0", "false", "no", "off"].includes(raw.trim().toLowerCase());
+}
+
 export interface ScreenerConfig {
   apiKey: string;
   host: string;
@@ -47,11 +53,20 @@ export interface ScreenerConfig {
   holderVelTarget: number; // holders/min for full holder points
   volRatioTarget: number;  // 1m-vs-1h-average volume multiple for full points
 
-  // Hard gates
+  // Hard gates: size / rug
   minLiquidityUsd: number;
   minHolders: number;
   maxRugRatio: number;
-  maxTop10Rate: number;
+
+  // Hard gates: supply control (fractions of total supply; a token over ANY
+  // of these is blocked, unknown values never block)
+  maxTop10Rate: number;         // top-10 wallets
+  maxBundlerRate: number;       // launch-bundle wallets
+  maxInsiderRate: number;       // wallets holding without ever buying after open
+  maxDevHoldRate: number;       // dev / team wallets
+  maxSniperHoldRate: number;    // first-blocks buyers still holding
+  maxControlledSupply: number;  // bundlers + insiders + dev combined
+  requireRenounced: boolean;    // block when mint or freeze authority is still live
 
   alertWebhookUrl: string;
   dataDir: string;
@@ -85,7 +100,15 @@ export function loadConfig(): ScreenerConfig {
     minLiquidityUsd: num("MIN_LIQUIDITY_USD", 10_000),
     minHolders: num("MIN_HOLDERS", 25),
     maxRugRatio: num("MAX_RUG_RATIO", 0.3),
-    maxTop10Rate: num("MAX_TOP10_RATE", 0.5),
+
+    // GMGN's own security check calls top-10 < 30% "relatively safe".
+    maxTop10Rate: num("MAX_TOP10_RATE", 0.3),
+    maxBundlerRate: num("MAX_BUNDLER_RATE", 0.25),
+    maxInsiderRate: num("MAX_INSIDER_RATE", 0.2),
+    maxDevHoldRate: num("MAX_DEV_HOLD_RATE", 0.1),
+    maxSniperHoldRate: num("MAX_SNIPER_HOLD_RATE", 0.4),
+    maxControlledSupply: num("MAX_CONTROLLED_SUPPLY", 0.4),
+    requireRenounced: bool("REQUIRE_RENOUNCED", true),
 
     alertWebhookUrl: str("ALERT_WEBHOOK_URL", ""),
     dataDir: str("DATA_DIR", join(process.cwd(), "data")),
