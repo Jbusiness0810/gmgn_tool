@@ -19,6 +19,7 @@ export function computeSignals(history: Snapshot[], now: number): Signals {
     volRatio1m: null,
     volRatio5m: null,
     volDelta5m: null,
+    volGrowth5m: null,
     buyRatio5m: null,
   };
   if (!latest) return empty;
@@ -52,8 +53,14 @@ export function computeSignals(history: Snapshot[], now: number): Signals {
   if (latest.vol5m != null && latest.vol1h != null && latest.vol1h >= 300) {
     out.volRatio5m = latest.vol5m / (latest.vol1h / 12);
   }
+
+  // --- Volume delta vs ~5 minutes ago (needs history) ---
+  // The 1h baseline hides a ramp inside an already-busy hour; comparing the
+  // trailing 5m window with the one before it catches "just started moving".
+  // The $500 floor keeps a dead token going $0 → $600 from reading as ∞×.
   if (ref5 && latest.vol5m != null && ref5.vol5m != null && latest.ts - ref5.ts >= 3.5 * MIN) {
     out.volDelta5m = latest.vol5m - ref5.vol5m;
+    out.volGrowth5m = latest.vol5m / Math.max(ref5.vol5m, 500);
   }
 
   if (latest.buys5m != null && latest.sells5m != null && latest.buys5m + latest.sells5m > 0) {

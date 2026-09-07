@@ -4,7 +4,7 @@ import type { ScreenerConfig } from "../config.js";
 import { toNum } from "../gmgn/client.js";
 import type { GmgnDataSource, RawRankToken, RawTrenchToken } from "../gmgn/types.js";
 import type { Alert, Snapshot, TokenFacts, TrackedToken } from "./model.js";
-import { scoreToken } from "./score.js";
+import { controlledSupply, scoreToken } from "./score.js";
 import { computeSignals } from "./signals.js";
 
 const HISTORY_WINDOW_MS = 3 * 60 * 60 * 1000; // keep 3h of snapshots
@@ -149,7 +149,7 @@ export class ScreenerEngine {
         facts,
         history: [],
         signals: computeSignals([], now),
-        score: { holder: 0, volume: 0, confirmation: 0, penalty: 0, total: 0, reasons: [], blockers: [] },
+        score: { holder: 0, volume: 0, momentum: 0, confirmation: 0, penalty: 0, intensity: 0, total: 0, reasons: [], blockers: [] },
         status: "tracking",
         hotStreak: 0,
         firstSeenAt: now,
@@ -285,13 +285,23 @@ export class ScreenerEngine {
         status: t.status,
         score: t.score,
         signals: t.signals,
+        controlledSupply: controlledSupply(t.facts),
         firstSeenAt: t.firstSeenAt,
         flaggedAt: t.flaggedAt,
         latest: t.history[t.history.length - 1] ?? null,
         holderSpark: spark(t.history, (s) => s.holders),
         volSpark: spark(t.history, (s) => s.vol1m ?? s.vol1h),
       }))
-      .sort((a, b) => statusRank(a.status) - statusRank(b.status) || b.score.total - a.score.total);
+      // Rank: status, then score, then the raw delta blend / the single biggest
+      // mover, so among equal scores the fastest holder or volume delta leads.
+      // (`?? 0` guards scores restored from a state file written by an older build.)
+      .sort(
+        (a, b) =>
+          statusRank(a.status) - statusRank(b.status) ||
+          b.score.total - a.score.total ||
+          (b.score.momentum ?? 0) - (a.score.momentum ?? 0) ||
+          (b.score.intensity ?? 0) - (a.score.intensity ?? 0)
+      );
     return {
       updatedAt: this.lastCycleAt,
       chain: this.cfg.chain,
@@ -303,6 +313,13 @@ export class ScreenerEngine {
         holderVelTarget: this.cfg.holderVelTarget,
         volRatioTarget: this.cfg.volRatioTarget,
         minLiquidityUsd: this.cfg.minLiquidityUsd,
+        maxTop10Rate: this.cfg.maxTop10Rate,
+        maxBundlerRate: this.cfg.maxBundlerRate,
+        maxInsiderRate: this.cfg.maxInsiderRate,
+        maxDevHoldRate: this.cfg.maxDevHoldRate,
+        maxSniperHoldRate: this.cfg.maxSniperHoldRate,
+        maxControlledSupply: this.cfg.maxControlledSupply,
+        requireRenounced: this.cfg.requireRenounced,
       },
       lastError: this.lastError,
       counts: {
@@ -367,9 +384,18 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     devHoldRate: toNum(raw.dev_team_hold_rate),
     sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
+    mintRenounced: renounced(raw.renounced_mint),
+    freezeRenounced: renounced(raw.renounced_freeze_account),
     twitter: raw.twitter_username ?? null,
     website: raw.website ?? null,
   };
+}
+
+/** GMGN reports renounce status as 1/0 (sometimes boolean); anything else is unknown. */
+function renounced(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  const n = toNum(v);
+  return n === 1 ? true : n === 0 ? false : null;
 }
 
 function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
@@ -397,6 +423,8 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     devHoldRate: null,
     sniperHoldRate: null,
     creatorStatus: raw.creator_token_status ?? null,
+    mintRenounced: null,
+    freezeRenounced: null,
     twitter: null,
     website: null,
   };
