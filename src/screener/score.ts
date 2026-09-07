@@ -78,7 +78,7 @@ export function scoreToken(
     confirmation += Math.min(8, ((signals.buyRatio5m - 0.5) / 0.25) * 8);
     if (signals.buyRatio5m >= 0.6) reasons.push(`${Math.round(signals.buyRatio5m * 100)}% of 5m swaps are buys`);
   }
-  const p5 = facts.priceChange5m;
+  const p5 = facts.priceChange5m ?? signals.pricePct5m;
   if (p5 != null && p5 > 0) {
     confirmation += Math.min(6, (p5 / 30) * 6); // +30%/5m = full 6 pts
   } else if (p5 != null && p5 < -10) {

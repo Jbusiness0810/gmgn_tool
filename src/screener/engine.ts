@@ -4,7 +4,7 @@ import type { ScreenerConfig } from "../config.js";
 import { toNum } from "../gmgn/client.js";
 import type { GmgnDataSource, RawRankToken, RawTrenchToken } from "../gmgn/types.js";
 import type { Alert, Snapshot, TokenFacts, TrackedToken } from "./model.js";
-import { controlledSupply, isFreshLaunch, scoreToken } from "./score.js";
+import { controlledSupply, scoreToken } from "./score.js";
 import { computeSignals } from "./signals.js";
 
 const HISTORY_WINDOW_MS = 3 * 60 * 60 * 1000; // keep 3h of snapshots
@@ -115,6 +115,8 @@ export class ScreenerEngine {
         swaps5m: toNum(r5?.swaps),
         buys5m: toNum(r5?.buys),
         sells5m: toNum(r5?.sells),
+        buys24h: null,
+        sells24h: null,
         price: toNum(primary.price),
         marketCap: toNum(primary.market_cap),
         liquidity: toNum(primary.liquidity),
@@ -137,6 +139,8 @@ export class ScreenerEngine {
         swaps5m: null,
         buys5m: toNum(raw.buys),
         sells5m: toNum(raw.sells),
+        buys24h: toNum(raw.buys_24h),
+        sells24h: toNum(raw.sells_24h),
         price: toNum(raw.price),
         marketCap: toNum(raw.usd_market_cap) ?? toNum(raw.market_cap),
         liquidity: toNum(raw.liquidity),
@@ -295,7 +299,9 @@ export class ScreenerEngine {
         score: t.score,
         signals: t.signals,
         controlledSupply: controlledSupply(t.facts),
-        fresh: isFreshLaunch(t.facts, ageMinutes(t.facts.createdAt, now), this.cfg),
+        // Dashboard "fresh" = launched inside the fresh window. (Gating also treats
+        // any on-curve token as fresh, but a stalled hours-old curve isn't news.)
+        fresh: (ageMinutes(t.facts.createdAt, now) ?? Infinity) < this.cfg.freshMaxAgeMin,
         firstSeenAt: t.firstSeenAt,
         flaggedAt: t.flaggedAt,
         latest: t.history[t.history.length - 1] ?? null,

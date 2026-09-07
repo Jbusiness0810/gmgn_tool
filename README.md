@@ -74,7 +74,11 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
    - *Volume growth*: trailing 5m volume vs the 5m before it. Catches a ramp
      that starts inside an already-busy hour, where the 1h baseline is high
      and the ratio above looks tame.
-   - *Buy pressure*: buys ÷ total swaps over the trailing 5m.
+   - *Buy pressure*: buys ÷ total swaps over the trailing 5m. Launchpad rows
+     only report lifetime counts, which for a token under an hour old is the
+     same thing, so those are used as the fallback. Price change over the
+     window is likewise derived from the screener's own snapshots when the
+     feed doesn't report one.
 4. **Scores** 0–100. The two deltas are blended **OR-style**: one strong
    recent delta is enough to rank near the top; both together rank highest.
 
@@ -116,8 +120,8 @@ liquidity, smart-money count, a supply column (top-10 / bundled / insider share:
 amber near a gate, red over it), and a click-to-expand score breakdown with
 every reason, blocker and the full supply-control read-out. The *Ranked* tab
 lists everything that passed the gates in rank order; *Fresh launches* narrows
-that to curve-phase and under-an-hour tokens (tagged CURVE / NEW). Rows link
-straight to the token's gmgn.ai page.
+that to tokens under an hour old (those still on a launchpad curve are tagged
+CURVE, the rest NEW). Rows link straight to the token's gmgn.ai page.
 
 ## Hosting it (always-on)
 

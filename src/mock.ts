@@ -293,8 +293,9 @@ export class MockSource implements GmgnDataSource {
         progress: 0.82,
         rug_ratio: 0.08,
         smart_degen_count: 2,
-        buys: 40,
-        sells: 18,
+        price: 0.00004 * (1 + minutesSince(now, 12) * 0.02), // +2%/min since launch
+        buys_24h: 40 + Math.round(minutesSince(now, 12) * 3),
+        sells_24h: 18 + Math.round(minutesSince(now, 12)),
       },
     ];
     return { near_completion: early, completed: [] };

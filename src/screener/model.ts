@@ -8,6 +8,8 @@ export interface Snapshot {
   swaps5m: number | null;
   buys5m: number | null;
   sells5m: number | null;
+  buys24h: number | null;  // launchpad rows only carry 24h counts
+  sells24h: number | null;
   price: number | null;
   marketCap: number | null;
   liquidity: number | null;
@@ -60,7 +62,8 @@ export interface Signals {
   volRatio5m: number | null;       // vol5m ÷ (vol1h/12)
   volDelta5m: number | null;       // change in trailing-5m USD volume vs ~5m ago
   volGrowth5m: number | null;      // vol5m ÷ vol5m ~5m ago: >1 = volume ramping right now
-  buyRatio5m: number | null;       // buys ÷ (buys+sells) over trailing 5m
+  pricePct5m: number | null;       // price change over the ~5m window from our own snapshots, in %
+  buyRatio5m: number | null;       // buys ÷ (buys+sells): trailing 5m, or lifetime for launchpad rows under an hour old
 }
 
 export type TokenStatus = "flagged" | "watch" | "tracking" | "blocked";

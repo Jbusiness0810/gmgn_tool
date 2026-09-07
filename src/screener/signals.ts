@@ -20,6 +20,7 @@ export function computeSignals(history: Snapshot[], now: number, ageMin: number 
     volRatio5m: null,
     volDelta5m: null,
     volGrowth5m: null,
+    pricePct5m: null,
     buyRatio5m: null,
   };
   if (!latest) return empty;
@@ -67,8 +68,18 @@ export function computeSignals(history: Snapshot[], now: number, ageMin: number 
     out.volGrowth5m = latest.vol5m / Math.max(ref5.vol5m, 500);
   }
 
+  // Price move over the same ~5m window, from our own snapshots (the rank feed
+  // also reports one; launchpad rows don't, so this fills the gap for them).
+  if (ref5 && latest.price != null && ref5.price != null && ref5.price > 0 && latest.ts - ref5.ts >= 3.5 * MIN) {
+    out.pricePct5m = (latest.price / ref5.price - 1) * 100;
+  }
+
   if (latest.buys5m != null && latest.sells5m != null && latest.buys5m + latest.sells5m > 0) {
     out.buyRatio5m = latest.buys5m / (latest.buys5m + latest.sells5m);
+  } else if (ageMin != null && ageMin < 60 && latest.buys24h != null && latest.sells24h != null && latest.buys24h + latest.sells24h > 0) {
+    // Launchpad rows only carry 24h counts; under an hour old, that is the
+    // token's whole life, which is recent enough to stand in for "trailing".
+    out.buyRatio5m = latest.buys24h / (latest.buys24h + latest.sells24h);
   }
 
   return out;
