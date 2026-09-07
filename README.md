@@ -68,7 +68,9 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
      plus *acceleration* (recent 5m velocity vs the 5m before it).
    - *Volume ratio*: trailing 1m (and 5m) volume vs the token's **own** 1h
      average: `vol_1m ÷ (vol_1h / 60)`. A token doing 3× its own baseline is
-     heating up regardless of its absolute size.
+     heating up regardless of its absolute size. For tokens younger than an
+     hour the baseline divides by their age instead of 60, so a five-minute-old
+     launch isn't credited with 12× its "hourly" pace.
    - *Volume growth*: trailing 5m volume vs the 5m before it. Catches a ramp
      that starts inside an already-busy hour, where the 1h baseline is high
      and the ratio above looks tame.
@@ -91,7 +93,10 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
 5. **Gates**: hard blocks with score 0, never flagged however fast they move.
    Blocked tokens sit under the dashboard's *Blocked* tab with the reason.
    - *Rug / manipulation:* `rug_ratio` > 0.3, wash trading, honeypot.
-   - *Size:* liquidity < $10k, < 25 holders.
+   - *Size:* liquidity < $10k, < 25 holders. **Fresh launches** (still on
+     the launchpad bonding curve, or younger than 60 min) skip the liquidity
+     floor, because a curve reserve or a minutes-old pool isn't comparable to
+     DEX liquidity, and must clear a $5k market-cap floor instead.
    - *Bundled or supply-controlled* (any one trips it; an unknown value never
      blocks): top-10 holders > 30% (GMGN's own "relatively safe" line),
      bundled supply > 25%, insider-held supply > 20% (wallets that hold
@@ -110,8 +115,9 @@ volume sparklines, Δholders/5m, volume-vs-baseline multiple, buy %, market cap,
 liquidity, smart-money count, a supply column (top-10 / bundled / insider share:
 amber near a gate, red over it), and a click-to-expand score breakdown with
 every reason, blocker and the full supply-control read-out. The *Ranked* tab
-lists everything that passed the gates in rank order. Rows link straight to
-the token's gmgn.ai page.
+lists everything that passed the gates in rank order; *Fresh launches* narrows
+that to curve-phase and under-an-hour tokens (tagged CURVE / NEW). Rows link
+straight to the token's gmgn.ai page.
 
 ## Configuration
 
@@ -128,6 +134,8 @@ All via `.env` (see [.env.example](.env.example)):
 | `VOL_RATIO_TARGET` | `3` | volume-vs-1h-average multiple for full points |
 | `MIN_LIQUIDITY_USD` / `MIN_HOLDERS` | `10000` / `25` | hard gates |
 | `MAX_RUG_RATIO` | `0.3` | hard gate |
+| `MIN_FRESH_MCAP_USD` | `5000` | market-cap floor for fresh launches (replaces the liquidity floor) |
+| `FRESH_MAX_AGE_MIN` | `60` | age under which a token counts as a fresh launch |
 | `MAX_TOP10_RATE` | `0.3` | supply gate: top-10 holders' share |
 | `MAX_BUNDLER_RATE` | `0.25` | supply gate: launch-bundle wallets' share |
 | `MAX_INSIDER_RATE` | `0.2` | supply gate: insider-held share |

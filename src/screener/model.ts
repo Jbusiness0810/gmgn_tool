@@ -22,6 +22,7 @@ export interface TokenFacts {
   logo: string | null;
   source: "trending" | "trenches";
   launchpad: string | null;
+  onCurve: boolean | null;  // still on the launchpad bonding curve (no DEX pool yet)
   createdAt: number | null; // unix seconds
   priceChange1m: number | null;
   priceChange5m: number | null;

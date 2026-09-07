@@ -27,7 +27,9 @@ export interface RawRankToken {
   open_timestamp?: number | string;
   creation_timestamp?: number | string;
   launchpad_platform?: string;
-  exchange?: string;
+  launchpad_status?: number | string; // 0 = still on the curve, 1 = migrated
+  exchange?: string;                  // "pump" / "ray_launchpad" = curve; pump_amm / ray_v4 / ... = DEX pool
+  migrated_pool_exchange?: string;
   hot_level?: number | string;
   rank?: number | string;
 
@@ -81,7 +83,10 @@ export interface RawTrenchToken {
   holder_count?: number | string;
   created_timestamp?: number | string;
   open_timestamp?: number | string;
+  complete_timestamp?: number | string; // 0 until the token migrates off the curve
   launchpad_platform?: string;
+  launchpad_status?: number | string;
+  exchange?: string;
   progress?: number | string;
   rug_ratio?: number | string | null;
   is_wash_trading?: boolean | null;

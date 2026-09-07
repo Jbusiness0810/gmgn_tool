@@ -4,7 +4,7 @@ import type { ScreenerConfig } from "../config.js";
 import { toNum } from "../gmgn/client.js";
 import type { GmgnDataSource, RawRankToken, RawTrenchToken } from "../gmgn/types.js";
 import type { Alert, Snapshot, TokenFacts, TrackedToken } from "./model.js";
-import { controlledSupply, scoreToken } from "./score.js";
+import { controlledSupply, isFreshLaunch, scoreToken } from "./score.js";
 import { computeSignals } from "./signals.js";
 
 const HISTORY_WINDOW_MS = 3 * 60 * 60 * 1000; // keep 3h of snapshots
@@ -176,9 +176,9 @@ export class ScreenerEngine {
 
   private rescore(now: number): void {
     for (const token of this.tokens.values()) {
-      token.signals = computeSignals(token.history, now);
+      token.signals = computeSignals(token.history, now, ageMinutes(token.facts.createdAt, now));
       const latest = token.history[token.history.length - 1];
-      token.score = scoreToken(token.facts, token.signals, latest, this.cfg);
+      token.score = scoreToken(token.facts, token.signals, latest, this.cfg, now);
 
       if (token.score.blockers.length) {
         token.status = "blocked";
@@ -287,6 +287,7 @@ export class ScreenerEngine {
   // ---- read API for the dashboard ----
 
   getState() {
+    const now = Date.now();
     const tokens = [...this.tokens.values()]
       .map((t) => ({
         ...t.facts,
@@ -294,6 +295,7 @@ export class ScreenerEngine {
         score: t.score,
         signals: t.signals,
         controlledSupply: controlledSupply(t.facts),
+        fresh: isFreshLaunch(t.facts, ageMinutes(t.facts.createdAt, now), this.cfg),
         firstSeenAt: t.firstSeenAt,
         flaggedAt: t.flaggedAt,
         latest: t.history[t.history.length - 1] ?? null,
@@ -328,6 +330,8 @@ export class ScreenerEngine {
         maxSniperHoldRate: this.cfg.maxSniperHoldRate,
         maxControlledSupply: this.cfg.maxControlledSupply,
         requireRenounced: this.cfg.requireRenounced,
+        minFreshMcapUsd: this.cfg.minFreshMcapUsd,
+        freshMaxAgeMin: this.cfg.freshMaxAgeMin,
       },
       lastError: this.lastError,
       counts: {
@@ -335,6 +339,7 @@ export class ScreenerEngine {
         flagged: tokens.filter((t) => t.status === "flagged").length,
         watch: tokens.filter((t) => t.status === "watch").length,
         blocked: tokens.filter((t) => t.status === "blocked").length,
+        fresh: tokens.filter((t) => t.fresh && t.status !== "blocked").length,
       },
       tokens,
       alerts: this.alerts.slice(0, 50),
@@ -376,6 +381,7 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     logo: raw.logo ?? null,
     source: "trending",
     launchpad: raw.launchpad_platform ?? null,
+    onCurve: onCurve(raw),
     createdAt: toNum(raw.creation_timestamp) ?? toNum(raw.open_timestamp),
     priceChange1m: toNum(raw.price_change_percent1m),
     priceChange5m: toNum(raw.price_change_percent5m),
@@ -400,6 +406,26 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
   };
 }
 
+function ageMinutes(createdAtSec: number | null, nowMs: number): number | null {
+  return createdAtSec != null ? (nowMs / 1000 - createdAtSec) / 60 : null;
+}
+
+/**
+ * Still on the launchpad bonding curve? The exchange name decides ("pump",
+ * "ray_launchpad", "meteora_virtual_curve" are curves; pump_amm / ray_v4 /
+ * ray_clmm / meteora_* are DEX pools). launchpad_status (0 = on curve,
+ * 1 = migrated) and complete_timestamp only ever rule a curve *out*, since a
+ * few DEX-native tokens also report status 0.
+ */
+function onCurve(raw: { exchange?: unknown; launchpad_status?: unknown; complete_timestamp?: unknown }): boolean | null {
+  if ((toNum(raw.complete_timestamp) ?? 0) > 0) return false;
+  const status = toNum(raw.launchpad_status);
+  if (status != null && status !== 0) return false;
+  const ex = typeof raw.exchange === "string" ? raw.exchange.toLowerCase() : "";
+  if (!ex) return status === 0 ? true : null;
+  return ex === "pump" || /launchpad|virtual_curve|bonding/.test(ex);
+}
+
 /** GMGN reports renounce status as 1/0 (sometimes boolean); anything else is unknown. */
 function renounced(v: unknown): boolean | null {
   if (typeof v === "boolean") return v;
@@ -416,6 +442,7 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     logo: raw.logo ?? null,
     source: "trenches",
     launchpad: raw.launchpad_platform ?? null,
+    onCurve: onCurve(raw),
     createdAt: toNum(raw.created_timestamp) ?? toNum(raw.open_timestamp),
     priceChange1m: toNum(raw.price_change_percent1m),
     priceChange5m: toNum(raw.price_change_percent5m),

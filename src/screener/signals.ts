@@ -8,7 +8,7 @@ const MIN = 60_000;
  * anything without ≥3.5 minutes of history reports null holder deltas rather
  * than extrapolating from a 30-second blip.
  */
-export function computeSignals(history: Snapshot[], now: number): Signals {
+export function computeSignals(history: Snapshot[], now: number, ageMin: number | null = null): Signals {
   const latest = history[history.length - 1];
   const empty: Signals = {
     minutesCovered: null,
@@ -47,11 +47,15 @@ export function computeSignals(history: Snapshot[], now: number): Signals {
   // --- Volume acceleration (cross-interval, works from the first snapshot) ---
   // vol1m vs the token's own 1h average answers "is money arriving *right now*
   // faster than it has been?" — the volume-delta signal the screener centres on.
+  // A token younger than an hour has vol1h covering only its lifetime, so the
+  // per-minute baseline divides by its age rather than 60; otherwise a
+  // 5-minute-old token with steady volume would read as 12× its "hourly" pace.
+  const baselineMin = ageMin != null && ageMin < 60 ? Math.max(ageMin, 1) : 60;
   if (latest.vol1m != null && latest.vol1h != null && latest.vol1h >= 300) {
-    out.volRatio1m = latest.vol1m / (latest.vol1h / 60);
+    out.volRatio1m = latest.vol1m / (latest.vol1h / baselineMin);
   }
-  if (latest.vol5m != null && latest.vol1h != null && latest.vol1h >= 300) {
-    out.volRatio5m = latest.vol5m / (latest.vol1h / 12);
+  if (latest.vol5m != null && latest.vol1h != null && latest.vol1h >= 300 && baselineMin > 5) {
+    out.volRatio5m = latest.vol5m / ((latest.vol1h / baselineMin) * 5);
   }
 
   // --- Volume delta vs ~5 minutes ago (needs history) ---

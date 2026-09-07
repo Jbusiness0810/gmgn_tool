@@ -42,13 +42,17 @@
   .layout > main { min-width: 0; }  /* let the table scroll inside .tablewrap instead of widening the page */
   @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
 
-  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 14px; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
   .card .n { font-size: 22px; font-weight: 700; }
   .card .l { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .8px; }
   .card.flagged .n { color: var(--green); }
   .card.watch .n { color: var(--amber); }
   .card.blocked .n { color: var(--red); }
+  .card.fresh .n { color: var(--blue); }
+  .tag { font-size: 9px; padding: 1px 5px; border-radius: 6px; margin-left: 4px; vertical-align: middle; letter-spacing: .5px; font-weight: 700; }
+  .tag.curve { color: var(--amber); border: 1px solid #5a4a1e; }
+  .tag.new { color: var(--blue); border: 1px solid #1e3a5a; }
 
   .controls { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
   .tab {
@@ -124,11 +128,13 @@
       <div class="card watch"><div class="n" id="c-watch">0</div><div class="l">Watch</div></div>
       <div class="card"><div class="n" id="c-tracking">0</div><div class="l">Tracked</div></div>
       <div class="card blocked"><div class="n" id="c-blocked">0</div><div class="l">Risk-blocked</div></div>
+      <div class="card fresh"><div class="n" id="c-fresh">0</div><div class="l">Fresh launches</div></div>
     </div>
 
     <div class="controls">
       <div class="tab active" data-f="hot">Flagged + Watch</div>
       <div class="tab" data-f="ranked">Ranked</div>
+      <div class="tab" data-f="fresh">Fresh launches</div>
       <div class="tab" data-f="flagged">Flagged</div>
       <div class="tab" data-f="blocked">Blocked</div>
       <input id="search" placeholder="filter symbol / address…">
@@ -161,6 +167,8 @@
   price, smart money) − penalties (holders draining, bot-heavy activity, near-gate supply concentration, youth).
   Hard gates block outright: rug ratio, wash trading, honeypot, liquidity, holder count, and
   supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority).
+  Fresh launches (still on the launchpad curve, or under an hour old) swap the liquidity floor
+  for a market-cap floor, since a curve reserve or a minutes-old pool isn't DEX liquidity.
   Data: GMGN.ai OpenAPI.
   <br><br>⚠ This is a research/screening tool, not financial advice. Meme-token trading is
   extremely high risk; flagged ≠ safe. Always do your own due diligence.
@@ -220,6 +228,7 @@ function matches(t) {
   const q = $("search").value.trim().toLowerCase();
   if (q && !t.symbol.toLowerCase().includes(q) && !t.address.toLowerCase().includes(q)) return false;
   if (filter === "ranked") return t.status !== "blocked";
+  if (filter === "fresh") return t.fresh && t.status !== "blocked";
   if (filter === "hot") return t.status === "flagged" || t.status === "watch";
   return t.status === filter;
 }
@@ -263,6 +272,7 @@ function render() {
   $("c-watch").textContent = state.counts.watch;
   $("c-tracking").textContent = state.counts.tracking;
   $("c-blocked").textContent = state.counts.blocked;
+  $("c-fresh").textContent = state.counts.fresh ?? 0;
 
   const rows = [];
   for (const t of state.tokens) {
@@ -270,7 +280,7 @@ function render() {
     const s = t.signals, l = t.latest || {};
     const url = `https://gmgn.ai/${t.chain}/token/${t.address}`;
     rows.push(`<tr class="row" data-a="${esc(t.address)}">
-      <td><span class="sym">${esc(t.symbol)}</span> <a href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>
+      <td><span class="sym">${esc(t.symbol)}</span> <a href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>${t.onCurve ? '<span class="tag curve" title="still on the launchpad bonding curve">CURVE</span>' : t.fresh ? '<span class="tag new" title="launched within the fresh window">NEW</span>' : ""}
           <div class="name">${esc(t.name)}</div></td>
       <td><span class="status ${t.status}">${t.status.toUpperCase()}</span></td>
       <td>${scoreCell(t.score)}</td>
