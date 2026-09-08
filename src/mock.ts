@@ -109,6 +109,23 @@ const PROFILES: Profile[] = [
     smartMoney: 2,
     buyBias: 0.58,
   },
+  // --- fresh launch still on the curve: liquidity is a curve reserve, so the
+  //     DEX liquidity floor must not apply; the market-cap floor does ---
+  {
+    address: "MockCurveFreshLaunch4040404040404040404040404",
+    symbol: "CURVY",
+    name: "fresh launch on the curve",
+    createdAgoMin: 14,
+    baseHolders: 60,
+    baseVolPerMin: 400,
+    liquidity: 7_200,
+    marketCap: 26_000,
+    price: 0.000026,
+    surge: { startAgoMin: 6, holdersPerMin: 7, volMultiple: 3 },
+    smartMoney: 1,
+    buyBias: 0.62,
+    risk: { exchange: "pump", launchpad_status: 0 },
+  },
   // --- risky: momentum but hard-gated ---
   {
     address: "MockBundledLaunch1010101010101010101010101010",
@@ -184,7 +201,7 @@ const PROFILES: Profile[] = [
     address: "MockThinLiquidity6666666666666666666666666666",
     symbol: "THIN",
     name: "thin ice",
-    createdAgoMin: 25,
+    createdAgoMin: 180,
     baseHolders: 140,
     baseVolPerMin: 350,
     liquidity: 6_500,
@@ -270,14 +287,18 @@ export class MockSource implements GmgnDataSource {
         holder_count: Math.round(60 + minutesSince(now, 12) * 4),
         created_timestamp: Math.floor((START - 12 * 60_000) / 1000),
         launchpad_platform: "Pump.fun",
+        exchange: "pump",
+        launchpad_status: 0,
+        complete_timestamp: 0,
         progress: 0.82,
         rug_ratio: 0.08,
         smart_degen_count: 2,
-        buys: 40,
-        sells: 18,
+        price: 0.00004 * (1 + minutesSince(now, 12) * 0.02), // +2%/min since launch
+        buys_24h: 40 + Math.round(minutesSince(now, 12) * 3),
+        sells_24h: 18 + Math.round(minutesSince(now, 12)),
       },
     ];
-    return { pump: early, completed: [] };
+    return { near_completion: early, completed: [] };
   }
 
   private rankRow(p: Profile, seed: number, chain: string, interval: string, now: number): RawRankToken {
@@ -319,6 +340,8 @@ export class MockSource implements GmgnDataSource {
       price_change_percent1h: priceChange5m * 2.5,
       creation_timestamp: Math.floor((START - p.createdAgoMin * 60_000) / 1000),
       launchpad_platform: seed % 2 ? "Pump.fun" : "letsbonk",
+      exchange: "pump_amm",
+      launchpad_status: 1,
       hot_level: surging ? 3 : 1,
       rug_ratio: 0.05,
       is_wash_trading: false,
@@ -331,6 +354,7 @@ export class MockSource implements GmgnDataSource {
       creator_token_status: seed % 3 ? "creator_close" : "creator_hold",
       smart_degen_count: p.smartMoney ?? 0,
       renowned_count: p.kols ?? 0,
+      bot_degen_rate: 0.2 + (seed % 4) * 0.05,
       twitter_username: `${p.symbol.toLowerCase()}_coin`,
       website: null,
       ...p.risk,

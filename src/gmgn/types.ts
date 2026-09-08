@@ -27,7 +27,9 @@ export interface RawRankToken {
   open_timestamp?: number | string;
   creation_timestamp?: number | string;
   launchpad_platform?: string;
-  exchange?: string;
+  launchpad_status?: number | string; // 0 = still on the curve, 1 = migrated
+  exchange?: string;                  // "pump" / "ray_launchpad" = curve; pump_amm / ray_v4 / ... = DEX pool
+  migrated_pool_exchange?: string;
   hot_level?: number | string;
   rank?: number | string;
 
@@ -45,9 +47,11 @@ export interface RawRankToken {
   renounced_mint?: number | string | null;
   renounced_freeze_account?: number | string | null;
 
-  // Smart money / social
+  // Smart money / social / activity quality
   smart_degen_count?: number | string;
   renowned_count?: number | string;
+  bot_degen_count?: number | string;
+  bot_degen_rate?: number | string | null; // share of activity from bot wallets (0..1)
   twitter_username?: string | null;
   website?: string | null;
   telegram?: string | null;
@@ -55,27 +59,48 @@ export interface RawRankToken {
   [key: string]: unknown;
 }
 
-/** One entry of POST /v1/trenches → data.{new_creation|pump|completed}[] */
+/**
+ * One entry of POST /v1/trenches → data.{new_creation|near_completion|completed}[]
+ * Live rows carry 24h activity only (no 1m/5m/1h volume) and name some risk
+ * fields differently from market/rank (bundler_trader_amount_rate,
+ * top_10_holder_rate); the legacy names are kept as fallbacks.
+ */
 export interface RawTrenchToken {
   address?: string;
   symbol?: string;
   name?: string;
   logo?: string;
+  price?: number | string;
+  market_cap?: number | string;
   usd_market_cap?: number | string;
   liquidity?: number | string;
   volume_1h?: number | string;
   volume_24h?: number | string;
   swaps_1h?: number | string;
   swaps_24h?: number | string;
+  buys_24h?: number | string;
+  sells_24h?: number | string;
   holder_count?: number | string;
   created_timestamp?: number | string;
   open_timestamp?: number | string;
+  complete_timestamp?: number | string; // 0 until the token migrates off the curve
   launchpad_platform?: string;
+  launchpad_status?: number | string;
+  exchange?: string;
   progress?: number | string;
   rug_ratio?: number | string | null;
+  is_wash_trading?: boolean | null;
+  top_10_holder_rate?: number | string | null;
   top_holder_rate?: number | string | null;
+  bundler_trader_amount_rate?: number | string | null;
   bundler_rate?: number | string | null;
+  rat_trader_amount_rate?: number | string | null;
   insider_ratio?: number | string | null;
+  dev_team_hold_rate?: number | string | null;
+  top70_sniper_hold_rate?: number | string | null;
+  renounced_mint?: number | string | null;
+  renounced_freeze_account?: number | string | null;
+  bot_degen_rate?: number | string | null;
   smart_degen_count?: number | string;
   renowned_count?: number | string;
   creator_token_status?: string | null;
@@ -89,7 +114,8 @@ export interface RawTrenchToken {
 
 export interface TrenchesData {
   new_creation?: RawTrenchToken[];
-  /** near_completion comes back under the key `pump` */
+  near_completion?: RawTrenchToken[];
+  /** older responses used `pump` for near_completion */
   pump?: RawTrenchToken[];
   completed?: RawTrenchToken[];
   [key: string]: unknown;

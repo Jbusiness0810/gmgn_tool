@@ -25,6 +25,7 @@ export class ScreenerEngine {
   private lastAlertAt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
   private cycleCount = 0;
+  private inFlight = false;
   lastCycleAt: number | null = null;
   lastError: string | null = null;
 
@@ -51,6 +52,8 @@ export class ScreenerEngine {
    * pre-populate history (holder deltas need ≥3.5 min of snapshots).
    */
   async cycle(nowOverride?: number): Promise<void> {
+    if (this.inFlight) return; // a rate-limit pause can outlast the poll interval; never stack cycles
+    this.inFlight = true;
     const now = nowOverride ?? Date.now();
     try {
       const fetched = await this.fetchAll();
@@ -67,20 +70,25 @@ export class ScreenerEngine {
     } catch (err) {
       this.lastError = err instanceof Error ? err.message : String(err);
       console.error(`[screener] cycle failed: ${this.lastError}`);
+    } finally {
+      this.inFlight = false;
     }
   }
 
   private async fetchAll(): Promise<CycleFetch> {
     const { chain } = this.cfg;
-    // Weight budget/cycle: 3×rank(1) + 1×trenches(3) = 6 of a 20/s bucket — safe
-    // at any poll interval ≥10s. Requests are serialized inside the client.
+    // 4 requests per cycle, serialized and spaced 2s apart inside the client
+    // (free tier tolerates ~1 req/s), so a cycle takes ~8s of API time.
     const rank1m = await this.source.trendingRank(chain, "1m", { limit: 100 });
     const rank5m = await this.source.trendingRank(chain, "5m", { limit: 100 });
     const rank1h = await this.source.trendingRank(chain, "1h", { limit: 100 });
     const trenchData = await this.source.trenches(chain, ["near_completion", "completed"], 50, {
       min_holder_count: Math.max(1, Math.floor(this.cfg.minHolders / 2)),
     });
-    const trench = [...(trenchData.pump ?? []), ...(trenchData.completed ?? [])];
+    const trench = [
+      ...(trenchData.near_completion ?? trenchData.pump ?? []),
+      ...(trenchData.completed ?? []),
+    ];
     return { rank1m, rank5m, rank1h, trench };
   }
 
@@ -107,6 +115,8 @@ export class ScreenerEngine {
         swaps5m: toNum(r5?.swaps),
         buys5m: toNum(r5?.buys),
         sells5m: toNum(r5?.sells),
+        buys24h: null,
+        sells24h: null,
         price: toNum(primary.price),
         marketCap: toNum(primary.market_cap),
         liquidity: toNum(primary.liquidity),
@@ -129,8 +139,10 @@ export class ScreenerEngine {
         swaps5m: null,
         buys5m: toNum(raw.buys),
         sells5m: toNum(raw.sells),
-        price: null,
-        marketCap: toNum(raw.usd_market_cap),
+        buys24h: toNum(raw.buys_24h),
+        sells24h: toNum(raw.sells_24h),
+        price: toNum(raw.price),
+        marketCap: toNum(raw.usd_market_cap) ?? toNum(raw.market_cap),
         liquidity: toNum(raw.liquidity),
       };
       this.upsert(address, trenchFacts(raw, this.cfg.chain), snapshot, now);
@@ -168,9 +180,9 @@ export class ScreenerEngine {
 
   private rescore(now: number): void {
     for (const token of this.tokens.values()) {
-      token.signals = computeSignals(token.history, now);
+      token.signals = computeSignals(token.history, now, ageMinutes(token.facts.createdAt, now));
       const latest = token.history[token.history.length - 1];
-      token.score = scoreToken(token.facts, token.signals, latest, this.cfg);
+      token.score = scoreToken(token.facts, token.signals, latest, this.cfg, now);
 
       if (token.score.blockers.length) {
         token.status = "blocked";
@@ -279,6 +291,7 @@ export class ScreenerEngine {
   // ---- read API for the dashboard ----
 
   getState() {
+    const now = Date.now();
     const tokens = [...this.tokens.values()]
       .map((t) => ({
         ...t.facts,
@@ -286,6 +299,9 @@ export class ScreenerEngine {
         score: t.score,
         signals: t.signals,
         controlledSupply: controlledSupply(t.facts),
+        // Dashboard "fresh" = launched inside the fresh window. (Gating also treats
+        // any on-curve token as fresh, but a stalled hours-old curve isn't news.)
+        fresh: (ageMinutes(t.facts.createdAt, now) ?? Infinity) < this.cfg.freshMaxAgeMin,
         firstSeenAt: t.firstSeenAt,
         flaggedAt: t.flaggedAt,
         latest: t.history[t.history.length - 1] ?? null,
@@ -320,6 +336,8 @@ export class ScreenerEngine {
         maxSniperHoldRate: this.cfg.maxSniperHoldRate,
         maxControlledSupply: this.cfg.maxControlledSupply,
         requireRenounced: this.cfg.requireRenounced,
+        minFreshMcapUsd: this.cfg.minFreshMcapUsd,
+        freshMaxAgeMin: this.cfg.freshMaxAgeMin,
       },
       lastError: this.lastError,
       counts: {
@@ -327,6 +345,7 @@ export class ScreenerEngine {
         flagged: tokens.filter((t) => t.status === "flagged").length,
         watch: tokens.filter((t) => t.status === "watch").length,
         blocked: tokens.filter((t) => t.status === "blocked").length,
+        fresh: tokens.filter((t) => t.fresh && t.status !== "blocked").length,
       },
       tokens,
       alerts: this.alerts.slice(0, 50),
@@ -368,6 +387,7 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     logo: raw.logo ?? null,
     source: "trending",
     launchpad: raw.launchpad_platform ?? null,
+    onCurve: onCurve(raw),
     createdAt: toNum(raw.creation_timestamp) ?? toNum(raw.open_timestamp),
     priceChange1m: toNum(raw.price_change_percent1m),
     priceChange5m: toNum(raw.price_change_percent5m),
@@ -375,6 +395,7 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     smartMoney: toNum(raw.smart_degen_count),
     kols: toNum(raw.renowned_count),
     hotLevel: toNum(raw.hot_level),
+    botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
     washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
     honeypot: raw.is_honeypot == null ? null : toNum(raw.is_honeypot) === 1,
@@ -389,6 +410,26 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     twitter: raw.twitter_username ?? null,
     website: raw.website ?? null,
   };
+}
+
+function ageMinutes(createdAtSec: number | null, nowMs: number): number | null {
+  return createdAtSec != null ? (nowMs / 1000 - createdAtSec) / 60 : null;
+}
+
+/**
+ * Still on the launchpad bonding curve? The exchange name decides ("pump",
+ * "ray_launchpad", "meteora_virtual_curve" are curves; pump_amm / ray_v4 /
+ * ray_clmm / meteora_* are DEX pools). launchpad_status (0 = on curve,
+ * 1 = migrated) and complete_timestamp only ever rule a curve *out*, since a
+ * few DEX-native tokens also report status 0.
+ */
+function onCurve(raw: { exchange?: unknown; launchpad_status?: unknown; complete_timestamp?: unknown }): boolean | null {
+  if ((toNum(raw.complete_timestamp) ?? 0) > 0) return false;
+  const status = toNum(raw.launchpad_status);
+  if (status != null && status !== 0) return false;
+  const ex = typeof raw.exchange === "string" ? raw.exchange.toLowerCase() : "";
+  if (!ex) return status === 0 ? true : null;
+  return ex === "pump" || /launchpad|virtual_curve|bonding/.test(ex);
 }
 
 /** GMGN reports renounce status as 1/0 (sometimes boolean); anything else is unknown. */
@@ -407,6 +448,7 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     logo: raw.logo ?? null,
     source: "trenches",
     launchpad: raw.launchpad_platform ?? null,
+    onCurve: onCurve(raw),
     createdAt: toNum(raw.created_timestamp) ?? toNum(raw.open_timestamp),
     priceChange1m: toNum(raw.price_change_percent1m),
     priceChange5m: toNum(raw.price_change_percent5m),
@@ -414,17 +456,18 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     smartMoney: toNum(raw.smart_degen_count),
     kols: toNum(raw.renowned_count),
     hotLevel: null,
+    botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
-    washTrading: null,
+    washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
     honeypot: null,
-    top10Rate: toNum(raw.top_holder_rate),
-    bundlerRate: toNum(raw.bundler_rate),
-    insiderRate: toNum(raw.insider_ratio),
-    devHoldRate: null,
-    sniperHoldRate: null,
+    top10Rate: toNum(raw.top_holder_rate) ?? toNum(raw.top_10_holder_rate),
+    bundlerRate: toNum(raw.bundler_rate) ?? toNum(raw.bundler_trader_amount_rate),
+    insiderRate: toNum(raw.insider_ratio) ?? toNum(raw.rat_trader_amount_rate),
+    devHoldRate: toNum(raw.dev_team_hold_rate),
+    sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
-    mintRenounced: null,
-    freezeRenounced: null,
+    mintRenounced: renounced(raw.renounced_mint),
+    freezeRenounced: renounced(raw.renounced_freeze_account),
     twitter: null,
     website: null,
   };

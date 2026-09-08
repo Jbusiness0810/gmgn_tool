@@ -13,20 +13,24 @@ import type { ScoreBreakdown, Signals, Snapshot, TokenFacts } from "./model.js";
  *                            OR trailing-5m volume vs the 5m before it
  *   momentum          0–80   1.6 × max(holder, volume) + 0.4 × min(holder, volume)
  *   confirmation     −4–20   buy ratio, 5m price move, smart money / KOLs
- *   penalties         ≤ 0    holders draining, concentration, bundlers, insiders,
- *                            dev overhang, snipers, extreme youth
+ *   penalties         ≤ 0    holders draining, bot-driven activity, concentration,
+ *                            bundlers, insiders, dev overhang, snipers, extreme youth
  *
  * Hard gates (supply control, rug/wash/honeypot, liquidity, holder count) zero
  * the score and mark the token blocked, no matter how fast it is moving.
+ * Fresh launches (still on the curve, or younger than cfg.freshMaxAgeMin)
+ * trade the liquidity floor for a market-cap floor: see isFreshLaunch().
  */
 export function scoreToken(
   facts: TokenFacts,
   signals: Signals,
   latest: Snapshot | undefined,
-  cfg: ScreenerConfig
+  cfg: ScreenerConfig,
+  now: number = Date.now()
 ): ScoreBreakdown {
   const reasons: string[] = [];
-  const blockers = hardGates(facts, latest, cfg);
+  const ageMin = facts.createdAt != null ? (now / 1000 - facts.createdAt) / 60 : null;
+  const blockers = hardGates(facts, latest, cfg, ageMin);
   const holderTarget = Math.max(0.1, cfg.holderVelTarget);
   const volSpan = Math.max(0.01, cfg.volRatioTarget - 1); // 1× = baseline, target× = full
 
@@ -74,7 +78,7 @@ export function scoreToken(
     confirmation += Math.min(8, ((signals.buyRatio5m - 0.5) / 0.25) * 8);
     if (signals.buyRatio5m >= 0.6) reasons.push(`${Math.round(signals.buyRatio5m * 100)}% of 5m swaps are buys`);
   }
-  const p5 = facts.priceChange5m;
+  const p5 = facts.priceChange5m ?? signals.pricePct5m;
   if (p5 != null && p5 > 0) {
     confirmation += Math.min(6, (p5 / 30) * 6); // +30%/5m = full 6 pts
   } else if (p5 != null && p5 < -10) {
@@ -99,14 +103,18 @@ export function scoreToken(
   };
   pen(ramp(signals.holderPct5m == null ? null : -signals.holderPct5m, 0.02, 0.10, 10),
     `holders draining: ${signals.holderDelta5m} in ${signals.minutesCovered?.toFixed(0)}m`);
+  // Bot wallets show up as holders too: holder growth on a bot-heavy token is
+  // partly fake. Live median is ~40%, so only the bot-dominated tail is docked.
+  pen(ramp(facts.botRate, 0.5, 0.8, 8), `${pct(facts.botRate)} of activity is bot wallets`);
   pen(ramp(facts.top10Rate, 0.20, cfg.maxTop10Rate, 8), `top-10 hold ${pct(facts.top10Rate)}`);
   pen(ramp(facts.bundlerRate, 0.10, cfg.maxBundlerRate, 10), `bundled supply ${pct(facts.bundlerRate)}`);
   pen(ramp(facts.insiderRate, 0.05, cfg.maxInsiderRate, 8), `insiders hold ${pct(facts.insiderRate)}`);
   pen(ramp(facts.devHoldRate, 0.03, cfg.maxDevHoldRate, 4), `dev/team holds ${pct(facts.devHoldRate)}`);
   pen(ramp(facts.sniperHoldRate, 0.15, cfg.maxSniperHoldRate, 6), `snipers hold ${pct(facts.sniperHoldRate)}`);
 
-  const ageMin = facts.createdAt != null ? (Date.now() / 1000 - facts.createdAt) / 60 : null;
-  pen(ageMin != null && ageMin < 10 ? 10 : 0, `only ${ageMin?.toFixed(0)}m old, signals unreliable`);
+  // Youth: 10 pts at launch fading to 0 at 10 minutes (deltas need ~4 min of
+  // history anyway, and the volume baseline is already age-aware).
+  pen(ramp(ageMin == null ? null : 10 - ageMin, 0, 10, 10), `only ${ageMin?.toFixed(0)}m old, signals still settling`);
 
   const intensity = momentumIntensity(signals, cfg);
   const total = Math.max(0, Math.min(100, momentum + confirmation + penalty));
@@ -150,7 +158,17 @@ export function controlledSupply(facts: TokenFacts): number | null {
   return Math.min(1, parts.reduce((a, b) => a + b, 0));
 }
 
-function hardGates(facts: TokenFacts, latest: Snapshot | undefined, cfg: ScreenerConfig): string[] {
+/**
+ * A fresh launch is a token still on its launchpad bonding curve, or one
+ * younger than cfg.freshMaxAgeMin. Its "liquidity" is a curve reserve or a
+ * minutes-old pool GMGN may not have indexed yet, so it is gated on market
+ * cap instead of the DEX liquidity floor.
+ */
+export function isFreshLaunch(facts: TokenFacts, ageMin: number | null, cfg: ScreenerConfig): boolean {
+  return facts.onCurve === true || (ageMin != null && ageMin < cfg.freshMaxAgeMin);
+}
+
+function hardGates(facts: TokenFacts, latest: Snapshot | undefined, cfg: ScreenerConfig, ageMin: number | null): string[] {
   const blockers: string[] = [];
 
   // Rug / manipulation
@@ -174,9 +192,15 @@ function hardGates(facts: TokenFacts, latest: Snapshot | undefined, cfg: Screene
     if (facts.freezeRenounced === false) blockers.push("freeze authority not renounced (holders can be frozen)");
   }
 
-  // Size
-  const liq = latest?.liquidity;
-  if (liq != null && liq < cfg.minLiquidityUsd) blockers.push(`liquidity $${fmtUsd(liq)} < $${fmtUsd(cfg.minLiquidityUsd)}`);
+  // Size: DEX liquidity floor, or a market-cap floor for fresh launches
+  // (a curve has no pool to pull, and a just-created pool often reads $0).
+  if (isFreshLaunch(facts, ageMin, cfg)) {
+    const mc = latest?.marketCap;
+    if (mc != null && mc < cfg.minFreshMcapUsd) blockers.push(`market cap ${fmtUsd(mc)} < ${fmtUsd(cfg.minFreshMcapUsd)} (fresh launch floor)`);
+  } else {
+    const liq = latest?.liquidity;
+    if (liq != null && liq < cfg.minLiquidityUsd) blockers.push(`liquidity ${fmtUsd(liq)} < ${fmtUsd(cfg.minLiquidityUsd)}`);
+  }
   const holders = latest?.holders;
   if (holders != null && holders < cfg.minHolders) blockers.push(`only ${holders} holders`);
   return blockers;

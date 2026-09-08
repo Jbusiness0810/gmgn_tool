@@ -58,6 +58,11 @@ export interface ScreenerConfig {
   minHolders: number;
   maxRugRatio: number;
 
+  // Fresh launches (still on the launchpad curve, or younger than
+  // freshMaxAgeMin) swap the liquidity floor for a market-cap floor
+  minFreshMcapUsd: number;
+  freshMaxAgeMin: number;
+
   // Hard gates: supply control (fractions of total supply; a token over ANY
   // of these is blocked, unknown values never block)
   maxTop10Rate: number;         // top-10 wallets
@@ -100,6 +105,8 @@ export function loadConfig(): ScreenerConfig {
     minLiquidityUsd: num("MIN_LIQUIDITY_USD", 10_000),
     minHolders: num("MIN_HOLDERS", 25),
     maxRugRatio: num("MAX_RUG_RATIO", 0.3),
+    minFreshMcapUsd: num("MIN_FRESH_MCAP_USD", 5_000),
+    freshMaxAgeMin: num("FRESH_MAX_AGE_MIN", 60),
 
     // GMGN's own security check calls top-10 < 30% "relatively safe".
     maxTop10Rate: num("MAX_TOP10_RATE", 0.3),
