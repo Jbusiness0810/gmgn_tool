@@ -338,6 +338,9 @@ export class ScreenerEngine {
         requireRenounced: this.cfg.requireRenounced,
         minFreshMcapUsd: this.cfg.minFreshMcapUsd,
         freshMaxAgeMin: this.cfg.freshMaxAgeMin,
+        minLpLock: this.cfg.minLpLock,
+        maxTax: this.cfg.maxTax,
+        maxCreatorTokens: this.cfg.maxCreatorTokens,
       },
       lastError: this.lastError,
       counts: {
@@ -379,6 +382,7 @@ function definedOnly<T extends object>(obj: T): Partial<T> {
 }
 
 function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
+  const evm = isEvmAddress(raw.address ?? "");
   return {
     address: raw.address ?? "",
     symbol: raw.symbol ?? "?",
@@ -398,18 +402,51 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
     washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
-    honeypot: raw.is_honeypot == null ? null : toNum(raw.is_honeypot) === 1,
+    honeypot: flag(raw.is_honeypot),
     top10Rate: toNum(raw.top_10_holder_rate),
     bundlerRate: toNum(raw.bundler_rate),
     insiderRate: toNum(raw.rat_trader_amount_rate),
     devHoldRate: toNum(raw.dev_team_hold_rate),
     sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
-    mintRenounced: renounced(raw.renounced_mint),
-    freezeRenounced: renounced(raw.renounced_freeze_account),
+    // Solana and EVM report different authorities; GMGN fills the other chain's
+    // fields with 0, so each set is read only for its own address format.
+    mintRenounced: evm ? null : flag(raw.renounced_mint),
+    freezeRenounced: evm ? null : flag(raw.renounced_freeze_account),
+    ownerRenounced: evm ? flag(raw.is_renounced) : null,
+    lpLockRate: evm ? toNum(raw.lock_percent) : null,
+    buyTax: evm ? tax(raw.buy_tax) : null,
+    sellTax: evm ? tax(raw.sell_tax) : null,
+    openSource: evm ? flag(raw.is_open_source) : null,
+    creatorTokens: null,
+    creatorOpenRatio: null,
+    freshWalletRate: null,
     twitter: raw.twitter_username ?? null,
     website: raw.website ?? null,
   };
+}
+
+function isEvmAddress(address: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(address);
+}
+
+/** Yes/no flags arrive as booleans, 0/1, "0"/"1", "yes"/"no" or "unknown". */
+function flag(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1 ? true : v === 0 ? false : null;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "1" || s === "yes" || s === "true") return true;
+    if (s === "0" || s === "no" || s === "false") return false;
+  }
+  return null;
+}
+
+/** Tax as a fraction; GMGN sends "0", "5" (percent) or 0.05 (fraction). */
+function tax(v: unknown): number | null {
+  const n = toNum(v);
+  if (n == null) return null;
+  return n >= 1 ? n / 100 : n;
 }
 
 function ageMinutes(createdAtSec: number | null, nowMs: number): number | null {
@@ -423,23 +460,27 @@ function ageMinutes(createdAtSec: number | null, nowMs: number): number | null {
  * 1 = migrated) and complete_timestamp only ever rule a curve *out*, since a
  * few DEX-native tokens also report status 0.
  */
-function onCurve(raw: { exchange?: unknown; launchpad_status?: unknown; complete_timestamp?: unknown }): boolean | null {
+function onCurve(raw: {
+  exchange?: unknown;
+  launchpad_status?: unknown;
+  launchpad_platform?: unknown;
+  complete_timestamp?: unknown;
+}): boolean | null {
   if ((toNum(raw.complete_timestamp) ?? 0) > 0) return false;
   const status = toNum(raw.launchpad_status);
   if (status != null && status !== 0) return false;
+  const platform = typeof raw.launchpad_platform === "string" ? raw.launchpad_platform.toLowerCase() : "";
+  if (/^pool_|uniswap|pancake|raydium|orca/.test(platform)) return false; // DEX-native, never on a curve
   const ex = typeof raw.exchange === "string" ? raw.exchange.toLowerCase() : "";
-  if (!ex) return status === 0 ? true : null;
-  return ex === "pump" || /launchpad|virtual_curve|bonding/.test(ex);
-}
-
-/** GMGN reports renounce status as 1/0 (sometimes boolean); anything else is unknown. */
-function renounced(v: unknown): boolean | null {
-  if (typeof v === "boolean") return v;
-  const n = toNum(v);
-  return n === 1 ? true : n === 0 ? false : null;
+  if (/amm|_v[0-9]|clmm|dlmm|damm|uniswap|pancake|orca|meteora_d/.test(ex)) return false; // named DEX pool
+  // On EVM chains the exchange is a contract address, so status 0 is the signal.
+  if (status === 0) return true;
+  if (ex) return ex === "pump" || /launchpad|virtual_curve|bonding/.test(ex);
+  return null;
 }
 
 function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
+  const evm = isEvmAddress(raw.address ?? "");
   return {
     address: raw.address ?? "",
     symbol: raw.symbol ?? "?",
@@ -459,15 +500,23 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
     washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
-    honeypot: null,
+    honeypot: flag(raw.is_honeypot),
     top10Rate: toNum(raw.top_holder_rate) ?? toNum(raw.top_10_holder_rate),
     bundlerRate: toNum(raw.bundler_rate) ?? toNum(raw.bundler_trader_amount_rate),
     insiderRate: toNum(raw.insider_ratio) ?? toNum(raw.rat_trader_amount_rate),
     devHoldRate: toNum(raw.dev_team_hold_rate),
     sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
-    mintRenounced: renounced(raw.renounced_mint),
-    freezeRenounced: renounced(raw.renounced_freeze_account),
+    mintRenounced: evm ? null : flag(raw.renounced_mint),
+    freezeRenounced: evm ? null : flag(raw.renounced_freeze_account),
+    ownerRenounced: evm ? flag(raw.owner_renounced) : null,
+    lpLockRate: evm ? toNum(raw.lock_percent) : null,
+    buyTax: evm ? tax(raw.buy_tax) : null,
+    sellTax: evm ? tax(raw.sell_tax) : null,
+    openSource: evm ? flag(raw.open_source) : null,
+    creatorTokens: toNum(raw.creator_created_count),
+    creatorOpenRatio: toNum(raw.creator_created_open_ratio),
+    freshWalletRate: toNum(raw.fresh_wallet_rate),
     twitter: null,
     website: null,
   };

@@ -1,6 +1,7 @@
 # GMGN Momentum Screener
 
-Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai) by watching for the two
+Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai), on Robinhood Chain by
+default (Solana, BSC, Base and Ethereum via `CHAIN`), by watching for the two
 signals that most often precede a run: **rapid holder growth** and **volume
 acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
 computes the deltas itself (GMGN only serves point-in-time snapshots), scores
@@ -107,6 +108,13 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
      without ever having bought after open), dev/team > 10%, snipers > 40%,
      bundlers + insiders + dev combined > 40%, and a mint or freeze authority
      that is still live (supply can be inflated / holders frozen).
+   - *EVM chains (Robinhood Chain, Ethereum, BSC, Base):* contract ownership
+     not renounced, buy or sell tax > 10%, LP less than 80% locked or burned
+     once a DEX pool exists (Pons launches lock 95%; Uniswap-native pools are
+     often 0%), and creator wallets that have launched more than 20 tokens
+     (the launchpad feed shows factories with hundreds of launches of which
+     under 1% ever opened). Unverified source, fresh-wallet holders and
+     serial creators below the gate cost points instead.
 6. **Flags** a token when it scores ≥ `FLAG_SCORE` (default 70) for **2
    consecutive cycles** (debounce against one-tick spikes); ≥ `WATCH_SCORE`
    (default 50) marks it *watch*. Flag events print to the console, append to
@@ -161,7 +169,7 @@ All via `.env` (see [.env.example](.env.example)):
 | Variable | Default | Meaning |
 |---|---|---|
 | `GMGN_API_KEY` | — | required (except `npm run mock`) |
-| `CHAIN` | `sol` | `sol` / `bsc` / `base` / `eth` |
+| `CHAIN` | `robinhood` | `robinhood` / `sol` / `bsc` / `base` / `eth` / `arc` / `stable` (the API's own list) |
 | `POLL_INTERVAL_SEC` | `30` | seconds between cycles (min 10) |
 | `PORT` | `4477` | dashboard port |
 | `FLAG_SCORE` / `WATCH_SCORE` | `70` / `50` | status thresholds |
@@ -177,7 +185,10 @@ All via `.env` (see [.env.example](.env.example)):
 | `MAX_DEV_HOLD_RATE` | `0.1` | supply gate: dev/team share |
 | `MAX_SNIPER_HOLD_RATE` | `0.4` | supply gate: sniper-held share |
 | `MAX_CONTROLLED_SUPPLY` | `0.4` | supply gate: bundlers + insiders + dev combined |
-| `REQUIRE_RENOUNCED` | `1` | block while mint/freeze authority is live (set `0` if GMGN reports `0` for every token on your chain) |
+| `REQUIRE_RENOUNCED` | `1` | block while mint/freeze authority (Solana) or contract ownership (EVM) is live |
+| `MIN_LP_LOCK` | `0.8` | EVM: LP locked-or-burned share a DEX-listed token must have |
+| `MAX_TAX` | `0.1` | EVM: buy or sell tax above this fraction is blocked |
+| `MAX_CREATOR_TOKENS` | `20` | launchpad feed: creator wallets that launched more tokens than this are blocked |
 | `ALERT_WEBHOOK_URL` | — | optional webhook for flag alerts |
 
 Tune the two targets to taste: lower them on quiet days to surface more, raise

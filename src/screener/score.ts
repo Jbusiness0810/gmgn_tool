@@ -14,10 +14,12 @@ import type { ScoreBreakdown, Signals, Snapshot, TokenFacts } from "./model.js";
  *   momentum          0–80   1.6 × max(holder, volume) + 0.4 × min(holder, volume)
  *   confirmation     −4–20   buy ratio, 5m price move, smart money / KOLs
  *   penalties         ≤ 0    holders draining, bot-driven activity, concentration,
- *                            bundlers, insiders, dev overhang, snipers, extreme youth
+ *                            bundlers, insiders, dev overhang, snipers, extreme youth,
+ *                            unverified source, fresh-wallet holders, serial creators
  *
- * Hard gates (supply control, rug/wash/honeypot, liquidity, holder count) zero
- * the score and mark the token blocked, no matter how fast it is moving.
+ * Hard gates (supply control, rug/wash/honeypot, liquidity, holder count, and
+ * on EVM chains ownership, taxes, LP lock and creator factories) zero the
+ * score and mark the token blocked, no matter how fast it is moving.
  * Fresh launches (still on the curve, or younger than cfg.freshMaxAgeMin)
  * trade the liquidity floor for a market-cap floor: see isFreshLaunch().
  */
@@ -111,6 +113,9 @@ export function scoreToken(
   pen(ramp(facts.insiderRate, 0.05, cfg.maxInsiderRate, 8), `insiders hold ${pct(facts.insiderRate)}`);
   pen(ramp(facts.devHoldRate, 0.03, cfg.maxDevHoldRate, 4), `dev/team holds ${pct(facts.devHoldRate)}`);
   pen(ramp(facts.sniperHoldRate, 0.15, cfg.maxSniperHoldRate, 6), `snipers hold ${pct(facts.sniperHoldRate)}`);
+  pen(facts.openSource === false ? 8 : 0, "contract source not verified");
+  pen(ramp(facts.freshWalletRate, 0.3, 0.6, 8), `${pct(facts.freshWalletRate)} of holders are fresh wallets`);
+  pen(ramp(facts.creatorTokens, 3, cfg.maxCreatorTokens, 8), `creator has launched ${facts.creatorTokens} tokens`);
 
   // Youth: 10 pts at launch fading to 0 at 10 minutes (deltas need ~4 min of
   // history anyway, and the volume baseline is already age-aware).
@@ -190,6 +195,18 @@ function hardGates(facts: TokenFacts, latest: Snapshot | undefined, cfg: Screene
   if (cfg.requireRenounced) {
     if (facts.mintRenounced === false) blockers.push("mint authority not renounced (supply can be inflated)");
     if (facts.freezeRenounced === false) blockers.push("freeze authority not renounced (holders can be frozen)");
+    if (facts.ownerRenounced === false) blockers.push("contract ownership not renounced (owner can change the rules)");
+  }
+
+  // EVM chains: taxes, LP lock once a DEX pool exists, creator factories.
+  const taxHit = Math.max(facts.buyTax ?? 0, facts.sellTax ?? 0);
+  if (taxHit > cfg.maxTax) blockers.push(`buy/sell tax ${pct(facts.buyTax)}/${pct(facts.sellTax)} > ${pct(cfg.maxTax)}`);
+  if (facts.lpLockRate != null && facts.onCurve !== true && facts.lpLockRate < cfg.minLpLock) {
+    blockers.push(`LP locked ${pct(facts.lpLockRate)} < ${pct(cfg.minLpLock)} (pool can be pulled)`);
+  }
+  if (facts.creatorTokens != null && facts.creatorTokens > cfg.maxCreatorTokens) {
+    const opened = facts.creatorOpenRatio != null ? ` (${pct(facts.creatorOpenRatio)} ever opened)` : "";
+    blockers.push(`creator launched ${facts.creatorTokens} tokens${opened} > ${cfg.maxCreatorTokens}`);
   }
 
   // Size: DEX liquidity floor, or a market-cap floor for fresh launches

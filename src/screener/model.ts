@@ -45,8 +45,18 @@ export interface TokenFacts {
   devHoldRate: number | null;    // dev / team wallets
   sniperHoldRate: number | null; // first-blocks buyers still holding
   creatorStatus: string | null;  // creator_hold / creator_close
-  mintRenounced: boolean | null;   // false => more supply can be minted
-  freezeRenounced: boolean | null; // false => holder accounts can be frozen
+  mintRenounced: boolean | null;   // Solana: false => more supply can be minted
+  freezeRenounced: boolean | null; // Solana: false => holder accounts can be frozen
+  // EVM chains only (null on Solana)
+  ownerRenounced: boolean | null;  // false => the contract owner can still change the rules
+  lpLockRate: number | null;       // share of LP locked or burned; low => the pool can be pulled
+  buyTax: number | null;           // fraction
+  sellTax: number | null;          // fraction
+  openSource: boolean | null;      // contract source verified
+  // Creator / holder provenance (launchpad feed)
+  creatorTokens: number | null;    // tokens this creator wallet has launched
+  creatorOpenRatio: number | null; // share of those that ever opened for trading
+  freshWalletRate: number | null;  // share of holders that are brand-new wallets
 
   twitter: string | null;
   website: string | null;

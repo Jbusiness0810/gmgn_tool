@@ -11,6 +11,6 @@ services:
       - key: GMGN_API_KEY
         sync: false
       - key: CHAIN
-        value: sol
+        value: robinhood
       - key: POLL_INTERVAL_SEC
         value: "30"

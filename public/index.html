@@ -166,7 +166,9 @@
   the previous 5m), so one strong delta is enough to rank; + confirmation (−4–20: buy pressure,
   price, smart money) − penalties (holders draining, bot-heavy activity, near-gate supply concentration, youth).
   Hard gates block outright: rug ratio, wash trading, honeypot, liquidity, holder count, and
-  supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority).
+  supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority on
+  Solana; on EVM chains live contract ownership, taxes above 10%, LP under 80% locked, and creator
+  wallets that launched more than 20 tokens).
   Fresh launches (still on the launchpad curve, or under an hour old) swap the liquidity floor
   for a market-cap floor, since a curve reserve or a minutes-old pool isn't DEX liquidity.
   Data: GMGN.ai OpenAPI.
@@ -324,6 +326,7 @@ function detailRow(t) {
   ].filter(Boolean).join(" · ");
   const th = state.thresholds || {};
   const auth = (ok) => ok === true ? '<span class="pos">renounced</span>' : ok === false ? '<span class="neg">LIVE</span>' : '<span class="dim">unknown</span>';
+  const src = (ok) => ok === true ? '<span class="pos">verified</span>' : ok === false ? '<span class="neg">unverified</span>' : '<span class="dim">unknown</span>';
   const momentum = sc.momentum ?? 0, intensity = sc.intensity ?? 0;
   return `<tr class="detail"><td colspan="14">
     <div class="breakdown">
@@ -340,7 +343,9 @@ function detailRow(t) {
       · insiders ${pctOr(t.insiderRate)} (gate ${pctOr(th.maxInsiderRate)})
       · dev ${pctOr(t.devHoldRate)} · snipers ${pctOr(t.sniperHoldRate)} · bots ${pctOr(t.botRate)}
       · controlled ≈${pctOr(t.controlledSupply)} (gate ${pctOr(th.maxControlledSupply)})
-      · mint ${auth(t.mintRenounced)} · freeze ${auth(t.freezeRenounced)}</div>
+      ${t.mintRenounced != null || t.freezeRenounced != null ? `· mint ${auth(t.mintRenounced)} · freeze ${auth(t.freezeRenounced)}` : ""}
+      ${t.ownerRenounced != null || t.lpLockRate != null || t.buyTax != null ? `· owner ${auth(t.ownerRenounced)} · LP locked ${pctOr(t.lpLockRate)} (gate ${pctOr(th.minLpLock)}) · tax ${pctOr(t.buyTax)}/${pctOr(t.sellTax)} · source ${src(t.openSource)}` : ""}
+      ${t.creatorTokens != null ? `· creator launched ${t.creatorTokens} tokens${t.creatorOpenRatio != null ? " (" + pctOr(t.creatorOpenRatio) + " opened)" : ""}` : ""}${t.freshWalletRate != null ? ` · fresh wallets ${pctOr(t.freshWalletRate)}` : ""}</div>
     <div class="dim">${esc(t.address)} · source: ${t.source}${t.launchpad ? " · " + esc(t.launchpad) : ""} · ${links}</div>
   </td></tr>`;
 }

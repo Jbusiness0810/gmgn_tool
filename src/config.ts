@@ -71,7 +71,12 @@ export interface ScreenerConfig {
   maxDevHoldRate: number;       // dev / team wallets
   maxSniperHoldRate: number;    // first-blocks buyers still holding
   maxControlledSupply: number;  // bundlers + insiders + dev combined
-  requireRenounced: boolean;    // block when mint or freeze authority is still live
+  requireRenounced: boolean;    // block while mint/freeze authority (Solana) or contract ownership (EVM) is still live
+
+  // Hard gates: EVM chains (robinhood / eth / bsc / base / arc / stable)
+  minLpLock: number;            // LP locked-or-burned share a DEX-listed token must have
+  maxTax: number;               // buy or sell tax above this fraction is blocked
+  maxCreatorTokens: number;     // creator wallets that launched more tokens than this are blocked
 
   alertWebhookUrl: string;
   dataDir: string;
@@ -92,7 +97,7 @@ export function loadConfig(): ScreenerConfig {
   return {
     apiKey,
     host: str("GMGN_HOST", "https://openapi.gmgn.ai"),
-    chain: str("CHAIN", "sol"),
+    chain: str("CHAIN", "robinhood"),
     mock,
     pollIntervalSec: Math.max(10, num("POLL_INTERVAL_SEC", 30)),
     port: num("PORT", 4477),
@@ -116,6 +121,9 @@ export function loadConfig(): ScreenerConfig {
     maxSniperHoldRate: num("MAX_SNIPER_HOLD_RATE", 0.4),
     maxControlledSupply: num("MAX_CONTROLLED_SUPPLY", 0.4),
     requireRenounced: bool("REQUIRE_RENOUNCED", true),
+    minLpLock: num("MIN_LP_LOCK", 0.8),
+    maxTax: num("MAX_TAX", 0.1),
+    maxCreatorTokens: num("MAX_CREATOR_TOKENS", 20),
 
     alertWebhookUrl: str("ALERT_WEBHOOK_URL", ""),
     dataDir: str("DATA_DIR", join(process.cwd(), "data")),
