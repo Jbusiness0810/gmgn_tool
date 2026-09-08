@@ -111,10 +111,13 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
    - *EVM chains (Robinhood Chain, Ethereum, BSC, Base):* contract ownership
      not renounced, buy or sell tax > 10%, LP less than 80% locked or burned
      once a DEX pool exists (Pons launches lock 95%; Uniswap-native pools are
-     often 0%), and creator wallets that have launched more than 20 tokens
-     (the launchpad feed shows factories with hundreds of launches of which
-     under 1% ever opened). Unverified source, fresh-wallet holders and
-     serial creators below the gate cost points instead.
+     often 0%), and spam-factory creators: wallets that launched more than
+     20 tokens of which under half ever opened for trading (the launchpad
+     feed shows factories with hundreds of launches and a 0 to 3% open rate;
+     platform contracts that deploy on users' behalf show huge counts too,
+     but nearly all of theirs open, so they pass). Unverified source,
+     fresh-wallet holders and serial creators below the gate cost points
+     instead.
 6. **Flags** a token when it scores ≥ `FLAG_SCORE` (default 70) for **2
    consecutive cycles** (debounce against one-tick spikes); ≥ `WATCH_SCORE`
    (default 50) marks it *watch*. Flag events print to the console, append to

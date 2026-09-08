@@ -115,7 +115,7 @@ export function scoreToken(
   pen(ramp(facts.sniperHoldRate, 0.15, cfg.maxSniperHoldRate, 6), `snipers hold ${pct(facts.sniperHoldRate)}`);
   pen(facts.openSource === false ? 8 : 0, "contract source not verified");
   pen(ramp(facts.freshWalletRate, 0.3, 0.6, 8), `${pct(facts.freshWalletRate)} of holders are fresh wallets`);
-  pen(ramp(facts.creatorTokens, 3, cfg.maxCreatorTokens, 8), `creator has launched ${facts.creatorTokens} tokens`);
+  if (isSpamFactory(facts, 0)) pen(ramp(facts.creatorTokens, 3, cfg.maxCreatorTokens, 8), `creator has launched ${facts.creatorTokens} tokens`);
 
   // Youth: 10 pts at launch fading to 0 at 10 minutes (deltas need ~4 min of
   // history anyway, and the volume baseline is already age-aware).
@@ -204,7 +204,7 @@ function hardGates(facts: TokenFacts, latest: Snapshot | undefined, cfg: Screene
   if (facts.lpLockRate != null && facts.onCurve !== true && facts.lpLockRate < cfg.minLpLock) {
     blockers.push(`LP locked ${pct(facts.lpLockRate)} < ${pct(cfg.minLpLock)} (pool can be pulled)`);
   }
-  if (facts.creatorTokens != null && facts.creatorTokens > cfg.maxCreatorTokens) {
+  if (isSpamFactory(facts, cfg.maxCreatorTokens)) {
     const opened = facts.creatorOpenRatio != null ? ` (${pct(facts.creatorOpenRatio)} ever opened)` : "";
     blockers.push(`creator launched ${facts.creatorTokens} tokens${opened} > ${cfg.maxCreatorTokens}`);
   }
@@ -221,6 +221,17 @@ function hardGates(facts: TokenFacts, latest: Snapshot | undefined, cfg: Screene
   const holders = latest?.holders;
   if (holders != null && holders < cfg.minHolders) blockers.push(`only ${holders} holders`);
   return blockers;
+}
+
+/**
+ * A creator wallet with many launches of which few ever opened for trading.
+ * Launchpad platform contracts also show huge counts, but nearly all of
+ * theirs open (they deploy on users' behalf), so the open ratio separates the
+ * two: only a low ratio marks a spam factory.
+ */
+function isSpamFactory(facts: TokenFacts, minTokens: number): boolean {
+  if (facts.creatorTokens == null || facts.creatorTokens <= minTokens) return false;
+  return facts.creatorOpenRatio == null || facts.creatorOpenRatio < 0.5;
 }
 
 /** Linear penalty ramp: 0 pts at `from`, `maxPts` at `to` and beyond. */
