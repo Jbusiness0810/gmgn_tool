@@ -33,6 +33,14 @@ function str(name: string, fallback: string): string {
   return raw === undefined || raw === "" ? fallback : raw;
 }
 
+/** Comma- or space-separated list, lower-cased, de-duplicated. */
+function list(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const items = [...new Set(raw.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
+  return items.length ? items : fallback;
+}
+
 function bool(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -42,7 +50,7 @@ function bool(name: string, fallback: boolean): boolean {
 export interface ScreenerConfig {
   apiKey: string;
   host: string;
-  chain: string;
+  chains: string[]; // every chain polled each cycle (GMGN: robinhood, sol, bsc, base, eth, arc, stable)
   mock: boolean;
   pollIntervalSec: number;
   port: number;
@@ -71,7 +79,12 @@ export interface ScreenerConfig {
   maxDevHoldRate: number;       // dev / team wallets
   maxSniperHoldRate: number;    // first-blocks buyers still holding
   maxControlledSupply: number;  // bundlers + insiders + dev combined
-  requireRenounced: boolean;    // block when mint or freeze authority is still live
+  requireRenounced: boolean;    // block while mint/freeze authority (Solana) or contract ownership (EVM) is still live
+
+  // Hard gates: EVM chains (robinhood / eth / bsc / base / arc / stable)
+  minLpLock: number;            // LP locked-or-burned share a DEX-listed token must have
+  maxTax: number;               // buy or sell tax above this fraction is blocked
+  maxCreatorTokens: number;     // creator wallets that launched more tokens than this are blocked
 
   alertWebhookUrl: string;
   dataDir: string;
@@ -92,7 +105,7 @@ export function loadConfig(): ScreenerConfig {
   return {
     apiKey,
     host: str("GMGN_HOST", "https://openapi.gmgn.ai"),
-    chain: str("CHAIN", "sol"),
+    chains: list("CHAIN", ["robinhood", "sol"]),
     mock,
     pollIntervalSec: Math.max(10, num("POLL_INTERVAL_SEC", 30)),
     port: num("PORT", 4477),
@@ -116,6 +129,9 @@ export function loadConfig(): ScreenerConfig {
     maxSniperHoldRate: num("MAX_SNIPER_HOLD_RATE", 0.4),
     maxControlledSupply: num("MAX_CONTROLLED_SUPPLY", 0.4),
     requireRenounced: bool("REQUIRE_RENOUNCED", true),
+    minLpLock: num("MIN_LP_LOCK", 0.8),
+    maxTax: num("MAX_TAX", 0.1),
+    maxCreatorTokens: num("MAX_CREATOR_TOKENS", 20),
 
     alertWebhookUrl: str("ALERT_WEBHOOK_URL", ""),
     dataDir: str("DATA_DIR", join(process.cwd(), "data")),

@@ -1,8 +1,9 @@
 # GMGN Momentum Screener
 
-Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai) by watching for the two
-signals that most often precede a run: **rapid holder growth** and **volume
-acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
+Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai), on Robinhood Chain and
+Solana at once by default (any mix of GMGN's chains via `CHAIN`), by watching for
+the two signals that most often precede a run: **rapid holder growth** and
+**volume acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
 computes the deltas itself (GMGN only serves point-in-time snapshots), scores
 every token 0–100, and raises an alert when one crosses the flag threshold —
 with hard risk gates so rugs, honeypots, wash-traded and bundled or
@@ -54,9 +55,11 @@ is correct, disable IPv6 on your interface.
 
 Every `POLL_INTERVAL_SEC` (default 30s) the engine:
 
-1. **Fetches** `GET /v1/market/rank` at three intervals (`1m`, `5m`, `1h`) plus
-   `POST /v1/trenches` (near-completion + freshly graduated launchpad tokens):
-   4 requests per cycle, spaced 2s apart. The free tier allows roughly one
+1. **Fetches**, for every chain in `CHAIN`, `GET /v1/market/rank` at three
+   intervals (`1m`, `5m`, `1h`) plus `POST /v1/trenches` (near-completion +
+   freshly graduated launchpad tokens): 4 requests per chain per cycle, spaced
+   2s apart. Every token is keyed by chain and address, and the dashboard tags
+   each row with its chain and offers a chain filter. The free tier allows roughly one
    request per second with a burst of about three; faster than that answers
    429 and repeated violations ban the key for about a minute. The client
    honours the `reset_at` in a 429 body and never stacks overlapping cycles.
@@ -107,6 +110,16 @@ Every `POLL_INTERVAL_SEC` (default 30s) the engine:
      without ever having bought after open), dev/team > 10%, snipers > 40%,
      bundlers + insiders + dev combined > 40%, and a mint or freeze authority
      that is still live (supply can be inflated / holders frozen).
+   - *EVM chains (Robinhood Chain, Ethereum, BSC, Base):* contract ownership
+     not renounced, buy or sell tax > 10%, LP less than 80% locked or burned
+     once a DEX pool exists (Pons launches lock 95%; Uniswap-native pools are
+     often 0%), and spam-factory creators: wallets that launched more than
+     20 tokens of which under half ever opened for trading (the launchpad
+     feed shows factories with hundreds of launches and a 0 to 3% open rate;
+     platform contracts that deploy on users' behalf show huge counts too,
+     but nearly all of theirs open, so they pass). Unverified source,
+     fresh-wallet holders and serial creators below the gate cost points
+     instead.
 6. **Flags** a token when it scores ≥ `FLAG_SCORE` (default 70) for **2
    consecutive cycles** (debounce against one-tick spikes); ≥ `WATCH_SCORE`
    (default 50) marks it *watch*. Flag events print to the console, append to
@@ -161,7 +174,7 @@ All via `.env` (see [.env.example](.env.example)):
 | Variable | Default | Meaning |
 |---|---|---|
 | `GMGN_API_KEY` | — | required (except `npm run mock`) |
-| `CHAIN` | `sol` | `sol` / `bsc` / `base` / `eth` |
+| `CHAIN` | `robinhood,sol` | comma-separated list, all polled every cycle: `robinhood` / `sol` / `bsc` / `base` / `eth` / `arc` / `stable` (the API's own list). Each chain is 4 requests (~8s) per cycle, so raise `POLL_INTERVAL_SEC` beyond two chains |
 | `POLL_INTERVAL_SEC` | `30` | seconds between cycles (min 10) |
 | `PORT` | `4477` | dashboard port |
 | `FLAG_SCORE` / `WATCH_SCORE` | `70` / `50` | status thresholds |
@@ -177,7 +190,10 @@ All via `.env` (see [.env.example](.env.example)):
 | `MAX_DEV_HOLD_RATE` | `0.1` | supply gate: dev/team share |
 | `MAX_SNIPER_HOLD_RATE` | `0.4` | supply gate: sniper-held share |
 | `MAX_CONTROLLED_SUPPLY` | `0.4` | supply gate: bundlers + insiders + dev combined |
-| `REQUIRE_RENOUNCED` | `1` | block while mint/freeze authority is live (set `0` if GMGN reports `0` for every token on your chain) |
+| `REQUIRE_RENOUNCED` | `1` | block while mint/freeze authority (Solana) or contract ownership (EVM) is live |
+| `MIN_LP_LOCK` | `0.8` | EVM: LP locked-or-burned share a DEX-listed token must have |
+| `MAX_TAX` | `0.1` | EVM: buy or sell tax above this fraction is blocked |
+| `MAX_CREATOR_TOKENS` | `20` | launchpad feed: creator wallets that launched more tokens than this are blocked |
 | `ALERT_WEBHOOK_URL` | — | optional webhook for flag alerts |
 
 Tune the two targets to taste: lower them on quiet days to surface more, raise

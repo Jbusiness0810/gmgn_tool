@@ -13,6 +13,7 @@ const REALERT_COOLDOWN_MS = 30 * 60 * 1000;
 const FLAG_STREAK = 2;                        // cycles at/above flag score before flagging
 
 interface CycleFetch {
+  chain: string;
   rank1m: RawRankToken[];
   rank5m: RawRankToken[];
   rank1h: RawRankToken[];
@@ -57,7 +58,8 @@ export class ScreenerEngine {
     const now = nowOverride ?? Date.now();
     try {
       const fetched = await this.fetchAll();
-      this.merge(fetched, now);
+      for (const f of fetched) this.merge(f, now);
+      this.evict(now);
       this.rescore(now);
       this.lastCycleAt = now;
       this.lastError = null;
@@ -75,21 +77,35 @@ export class ScreenerEngine {
     }
   }
 
-  private async fetchAll(): Promise<CycleFetch> {
-    const { chain } = this.cfg;
-    // 4 requests per cycle, serialized and spaced 2s apart inside the client
-    // (free tier tolerates ~1 req/s), so a cycle takes ~8s of API time.
-    const rank1m = await this.source.trendingRank(chain, "1m", { limit: 100 });
-    const rank5m = await this.source.trendingRank(chain, "5m", { limit: 100 });
-    const rank1h = await this.source.trendingRank(chain, "1h", { limit: 100 });
-    const trenchData = await this.source.trenches(chain, ["near_completion", "completed"], 50, {
-      min_holder_count: Math.max(1, Math.floor(this.cfg.minHolders / 2)),
-    });
-    const trench = [
-      ...(trenchData.near_completion ?? trenchData.pump ?? []),
-      ...(trenchData.completed ?? []),
-    ];
-    return { rank1m, rank5m, rank1h, trench };
+  /**
+   * 4 requests per chain per cycle, serialized and spaced 2s apart inside the
+   * client (the free tier tolerates ~1 req/s): ~8s of API time per chain, so
+   * two chains fit a 30s poll interval. A chain that fails is logged and
+   * skipped for the cycle rather than blanking the others.
+   */
+  private async fetchAll(): Promise<CycleFetch[]> {
+    const out: CycleFetch[] = [];
+    let firstError: unknown = null;
+    for (const chain of this.cfg.chains) {
+      try {
+        const rank1m = await this.source.trendingRank(chain, "1m", { limit: 100 });
+        const rank5m = await this.source.trendingRank(chain, "5m", { limit: 100 });
+        const rank1h = await this.source.trendingRank(chain, "1h", { limit: 100 });
+        const trenchData = await this.source.trenches(chain, ["near_completion", "completed"], 50, {
+          min_holder_count: Math.max(1, Math.floor(this.cfg.minHolders / 2)),
+        });
+        const trench = [
+          ...(trenchData.near_completion ?? trenchData.pump ?? []),
+          ...(trenchData.completed ?? []),
+        ];
+        out.push({ chain, rank1m, rank5m, rank1h, trench });
+      } catch (err) {
+        console.error(`[screener] ${chain}: fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+        firstError ??= err;
+      }
+    }
+    if (!out.length && firstError) throw firstError;
+    return out;
   }
 
   private merge(fetched: CycleFetch, now: number): void {
@@ -121,14 +137,14 @@ export class ScreenerEngine {
         marketCap: toNum(primary.market_cap),
         liquidity: toNum(primary.liquidity),
       };
-      this.upsert(address, rankFacts(primary, this.cfg.chain), snapshot, now);
+      this.upsert(tokenKey(fetched.chain, address), rankFacts(primary, fetched.chain), snapshot, now);
     }
 
     for (const raw of fetched.trench) {
       const address = raw.address;
       if (!address) continue;
       // Trenches tokens that are also in rank already got a snapshot this cycle.
-      const existing = this.tokens.get(address);
+      const existing = this.tokens.get(tokenKey(fetched.chain, address));
       if (existing && existing.lastSeenAt === now) continue;
       const snapshot: Snapshot = {
         ts: now,
@@ -145,17 +161,19 @@ export class ScreenerEngine {
         marketCap: toNum(raw.usd_market_cap) ?? toNum(raw.market_cap),
         liquidity: toNum(raw.liquidity),
       };
-      this.upsert(address, trenchFacts(raw, this.cfg.chain), snapshot, now);
-    }
-
-    // Evict tokens that fell out of every feed long ago.
-    for (const [address, token] of this.tokens) {
-      if (now - token.lastSeenAt > EVICT_AFTER_MS) this.tokens.delete(address);
+      this.upsert(tokenKey(fetched.chain, address), trenchFacts(raw, fetched.chain), snapshot, now);
     }
   }
 
-  private upsert(address: string, facts: TokenFacts, snapshot: Snapshot, now: number): void {
-    let token = this.tokens.get(address);
+  /** Drop tokens that fell out of every feed long ago. */
+  private evict(now: number): void {
+    for (const [key, token] of this.tokens) {
+      if (now - token.lastSeenAt > EVICT_AFTER_MS) this.tokens.delete(key);
+    }
+  }
+
+  private upsert(key: string, facts: TokenFacts, snapshot: Snapshot, now: number): void {
+    let token = this.tokens.get(key);
     if (!token) {
       token = {
         facts,
@@ -168,7 +186,7 @@ export class ScreenerEngine {
         lastSeenAt: now,
         flaggedAt: null,
       };
-      this.tokens.set(address, token);
+      this.tokens.set(key, token);
     }
     // Preserve fields the current feed doesn't carry (trenches rows lack some).
     token.facts = { ...token.facts, ...definedOnly(facts) };
@@ -209,9 +227,10 @@ export class ScreenerEngine {
   }
 
   private emitAlert(token: TrackedToken, now: number): void {
-    const last = this.lastAlertAt.get(token.facts.address) ?? 0;
+    const key = tokenKey(token.facts.chain, token.facts.address);
+    const last = this.lastAlertAt.get(key) ?? 0;
     if (now - last < REALERT_COOLDOWN_MS) return;
-    this.lastAlertAt.set(token.facts.address, now);
+    this.lastAlertAt.set(key, now);
 
     const alert: Alert = {
       ts: now,
@@ -259,7 +278,7 @@ export class ScreenerEngine {
       mkdirSync(this.cfg.dataDir, { recursive: true });
       const state = {
         savedAt: Date.now(),
-        chain: this.cfg.chain,
+        chains: this.cfg.chains,
         tokens: [...this.tokens.entries()],
         alerts: this.alerts,
       };
@@ -275,12 +294,15 @@ export class ScreenerEngine {
       const state = JSON.parse(readFileSync(this.statePath, "utf-8")) as {
         savedAt?: number;
         chain?: string;
+        chains?: string[];
         tokens?: [string, TrackedToken][];
         alerts?: Alert[];
       };
-      if (state.chain !== this.cfg.chain) return; // stale state for another chain
+      const saved = state.chains ?? (state.chain ? [state.chain] : []);
+      if (saved.join(",") !== this.cfg.chains.join(",")) return; // stale state for another chain set
       if (!state.savedAt || Date.now() - state.savedAt > HISTORY_WINDOW_MS) return;
-      this.tokens = new Map(state.tokens ?? []);
+      // Older state files keyed tokens by address alone; re-key by chain:address.
+      this.tokens = new Map((state.tokens ?? []).map(([k, t]) => [k.includes(":") ? k : tokenKey(t.facts.chain, t.facts.address), t]));
       this.alerts = state.alerts ?? [];
       console.log(`[screener] restored ${this.tokens.size} tokens from ${this.statePath}`);
     } catch {
@@ -320,7 +342,8 @@ export class ScreenerEngine {
       );
     return {
       updatedAt: this.lastCycleAt,
-      chain: this.cfg.chain,
+      chain: this.cfg.chains.join(" + "),
+      chains: this.cfg.chains,
       mock: this.cfg.mock,
       pollIntervalSec: this.cfg.pollIntervalSec,
       thresholds: {
@@ -338,6 +361,9 @@ export class ScreenerEngine {
         requireRenounced: this.cfg.requireRenounced,
         minFreshMcapUsd: this.cfg.minFreshMcapUsd,
         freshMaxAgeMin: this.cfg.freshMaxAgeMin,
+        minLpLock: this.cfg.minLpLock,
+        maxTax: this.cfg.maxTax,
+        maxCreatorTokens: this.cfg.maxCreatorTokens,
       },
       lastError: this.lastError,
       counts: {
@@ -351,6 +377,11 @@ export class ScreenerEngine {
       alerts: this.alerts.slice(0, 50),
     };
   }
+}
+
+/** Map key: the same address never appears on two chains, but keep them apart anyway. */
+function tokenKey(chain: string, address: string): string {
+  return `${chain}:${address}`;
 }
 
 function statusRank(s: string): number {
@@ -379,6 +410,7 @@ function definedOnly<T extends object>(obj: T): Partial<T> {
 }
 
 function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
+  const evm = isEvmAddress(raw.address ?? "");
   return {
     address: raw.address ?? "",
     symbol: raw.symbol ?? "?",
@@ -398,18 +430,51 @@ function rankFacts(raw: RawRankToken, chain: string): TokenFacts {
     botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
     washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
-    honeypot: raw.is_honeypot == null ? null : toNum(raw.is_honeypot) === 1,
+    honeypot: flag(raw.is_honeypot),
     top10Rate: toNum(raw.top_10_holder_rate),
     bundlerRate: toNum(raw.bundler_rate),
     insiderRate: toNum(raw.rat_trader_amount_rate),
     devHoldRate: toNum(raw.dev_team_hold_rate),
     sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
-    mintRenounced: renounced(raw.renounced_mint),
-    freezeRenounced: renounced(raw.renounced_freeze_account),
+    // Solana and EVM report different authorities; GMGN fills the other chain's
+    // fields with 0, so each set is read only for its own address format.
+    mintRenounced: evm ? null : flag(raw.renounced_mint),
+    freezeRenounced: evm ? null : flag(raw.renounced_freeze_account),
+    ownerRenounced: evm ? flag(raw.is_renounced) : null,
+    lpLockRate: evm ? toNum(raw.lock_percent) : null,
+    buyTax: evm ? tax(raw.buy_tax) : null,
+    sellTax: evm ? tax(raw.sell_tax) : null,
+    openSource: evm ? flag(raw.is_open_source) : null,
+    creatorTokens: null,
+    creatorOpenRatio: null,
+    freshWalletRate: null,
     twitter: raw.twitter_username ?? null,
     website: raw.website ?? null,
   };
+}
+
+function isEvmAddress(address: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(address);
+}
+
+/** Yes/no flags arrive as booleans, 0/1, "0"/"1", "yes"/"no" or "unknown". */
+function flag(v: unknown): boolean | null {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1 ? true : v === 0 ? false : null;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "1" || s === "yes" || s === "true") return true;
+    if (s === "0" || s === "no" || s === "false") return false;
+  }
+  return null;
+}
+
+/** Tax as a fraction; GMGN sends "0", "5" (percent) or 0.05 (fraction). */
+function tax(v: unknown): number | null {
+  const n = toNum(v);
+  if (n == null) return null;
+  return n >= 1 ? n / 100 : n;
 }
 
 function ageMinutes(createdAtSec: number | null, nowMs: number): number | null {
@@ -423,23 +488,27 @@ function ageMinutes(createdAtSec: number | null, nowMs: number): number | null {
  * 1 = migrated) and complete_timestamp only ever rule a curve *out*, since a
  * few DEX-native tokens also report status 0.
  */
-function onCurve(raw: { exchange?: unknown; launchpad_status?: unknown; complete_timestamp?: unknown }): boolean | null {
+function onCurve(raw: {
+  exchange?: unknown;
+  launchpad_status?: unknown;
+  launchpad_platform?: unknown;
+  complete_timestamp?: unknown;
+}): boolean | null {
   if ((toNum(raw.complete_timestamp) ?? 0) > 0) return false;
   const status = toNum(raw.launchpad_status);
   if (status != null && status !== 0) return false;
+  const platform = typeof raw.launchpad_platform === "string" ? raw.launchpad_platform.toLowerCase() : "";
+  if (/^pool_|uniswap|pancake|raydium|orca/.test(platform)) return false; // DEX-native, never on a curve
   const ex = typeof raw.exchange === "string" ? raw.exchange.toLowerCase() : "";
-  if (!ex) return status === 0 ? true : null;
-  return ex === "pump" || /launchpad|virtual_curve|bonding/.test(ex);
-}
-
-/** GMGN reports renounce status as 1/0 (sometimes boolean); anything else is unknown. */
-function renounced(v: unknown): boolean | null {
-  if (typeof v === "boolean") return v;
-  const n = toNum(v);
-  return n === 1 ? true : n === 0 ? false : null;
+  if (/amm|_v[0-9]|clmm|dlmm|damm|uniswap|pancake|orca|meteora_d/.test(ex)) return false; // named DEX pool
+  // On EVM chains the exchange is a contract address, so status 0 is the signal.
+  if (status === 0) return true;
+  if (ex) return ex === "pump" || /launchpad|virtual_curve|bonding/.test(ex);
+  return null;
 }
 
 function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
+  const evm = isEvmAddress(raw.address ?? "");
   return {
     address: raw.address ?? "",
     symbol: raw.symbol ?? "?",
@@ -459,15 +528,23 @@ function trenchFacts(raw: RawTrenchToken, chain: string): TokenFacts {
     botRate: toNum(raw.bot_degen_rate),
     rugRatio: toNum(raw.rug_ratio),
     washTrading: typeof raw.is_wash_trading === "boolean" ? raw.is_wash_trading : null,
-    honeypot: null,
+    honeypot: flag(raw.is_honeypot),
     top10Rate: toNum(raw.top_holder_rate) ?? toNum(raw.top_10_holder_rate),
     bundlerRate: toNum(raw.bundler_rate) ?? toNum(raw.bundler_trader_amount_rate),
     insiderRate: toNum(raw.insider_ratio) ?? toNum(raw.rat_trader_amount_rate),
     devHoldRate: toNum(raw.dev_team_hold_rate),
     sniperHoldRate: toNum(raw.top70_sniper_hold_rate),
     creatorStatus: raw.creator_token_status ?? null,
-    mintRenounced: renounced(raw.renounced_mint),
-    freezeRenounced: renounced(raw.renounced_freeze_account),
+    mintRenounced: evm ? null : flag(raw.renounced_mint),
+    freezeRenounced: evm ? null : flag(raw.renounced_freeze_account),
+    ownerRenounced: evm ? flag(raw.owner_renounced) : null,
+    lpLockRate: evm ? toNum(raw.lock_percent) : null,
+    buyTax: evm ? tax(raw.buy_tax) : null,
+    sellTax: evm ? tax(raw.sell_tax) : null,
+    openSource: evm ? flag(raw.open_source) : null,
+    creatorTokens: toNum(raw.creator_created_count),
+    creatorOpenRatio: toNum(raw.creator_created_open_ratio),
+    freshWalletRate: toNum(raw.fresh_wallet_rate),
     twitter: null,
     website: null,
   };

@@ -60,10 +60,12 @@
     background: var(--panel); color: var(--dim); font-size: 12px;
   }
   .tab.active { color: var(--text); border-color: var(--green-dim); background: #16241a; }
-  #search {
+  #search, #chainsel {
     background: var(--panel); border: 1px solid var(--border); color: var(--text);
     border-radius: 6px; padding: 5px 10px; font: inherit; width: 180px;
   }
+  #chainsel { width: auto; text-transform: uppercase; }
+  .tag.chain { color: var(--dim); border: 1px solid var(--border); text-transform: uppercase; margin-left: 0; margin-right: 2px; }
 
   table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .tablewrap { overflow-x: auto; border-radius: 8px; }
@@ -137,6 +139,7 @@
       <div class="tab" data-f="fresh">Fresh launches</div>
       <div class="tab" data-f="flagged">Flagged</div>
       <div class="tab" data-f="blocked">Blocked</div>
+      <select id="chainsel" title="chain"><option value="">all chains</option></select>
       <input id="search" placeholder="filter symbol / address…">
     </div>
 
@@ -166,7 +169,9 @@
   the previous 5m), so one strong delta is enough to rank; + confirmation (−4–20: buy pressure,
   price, smart money) − penalties (holders draining, bot-heavy activity, near-gate supply concentration, youth).
   Hard gates block outright: rug ratio, wash trading, honeypot, liquidity, holder count, and
-  supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority).
+  supply control (top-10, bundled, insider, dev, sniper share; live mint/freeze authority on
+  Solana; on EVM chains live contract ownership, taxes above 10%, LP under 80% locked, and creator
+  wallets that launched more than 20 tokens).
   Fresh launches (still on the launchpad curve, or under an hour old) swap the liquidity floor
   for a market-cap floor, since a curve reserve or a minutes-old pool isn't DEX liquidity.
   Data: GMGN.ai OpenAPI.
@@ -227,6 +232,8 @@ function sparkline(values, w = 72, h = 20) {
 function matches(t) {
   const q = $("search").value.trim().toLowerCase();
   if (q && !t.symbol.toLowerCase().includes(q) && !t.address.toLowerCase().includes(q)) return false;
+  const chain = $("chainsel").value;
+  if (chain && t.chain !== chain) return false;
   if (filter === "ranked") return t.status !== "blocked";
   if (filter === "fresh") return t.fresh && t.status !== "blocked";
   if (filter === "hot") return t.status === "flagged" || t.status === "watch";
@@ -261,6 +268,15 @@ function supplyCell(t) {
 function render() {
   if (!state) return;
   $("chain").textContent = state.chain;
+  const chains = state.chains || [];
+  const sel = $("chainsel");
+  if (sel.dataset.key !== chains.join(",")) {
+    const cur = sel.value;
+    sel.dataset.key = chains.join(",");
+    sel.innerHTML = '<option value="">all chains</option>' + chains.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+    sel.value = chains.includes(cur) ? cur : "";
+  }
+  sel.style.display = chains.length > 1 ? "" : "none";
   $("mockbadge").style.display = state.mock ? "" : "none";
   $("updated").textContent = state.updatedAt
     ? "updated " + new Date(state.updatedAt).toLocaleTimeString() + " · refresh " + state.pollIntervalSec + "s"
@@ -280,7 +296,7 @@ function render() {
     const s = t.signals, l = t.latest || {};
     const url = `https://gmgn.ai/${t.chain}/token/${t.address}`;
     rows.push(`<tr class="row" data-a="${esc(t.address)}">
-      <td><span class="sym">${esc(t.symbol)}</span> <a href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>${t.onCurve ? '<span class="tag curve" title="still on the launchpad bonding curve">CURVE</span>' : t.fresh ? '<span class="tag new" title="launched within the fresh window">NEW</span>' : ""}
+      <td>${(state.chains || []).length > 1 ? '<span class="tag chain">' + esc(t.chain) + '</span>' : ""}<span class="sym">${esc(t.symbol)}</span> <a href="${url}" target="_blank" rel="noopener" onclick="event.stopPropagation()">↗</a>${t.onCurve ? '<span class="tag curve" title="still on the launchpad bonding curve">CURVE</span>' : t.fresh ? '<span class="tag new" title="launched within the fresh window">NEW</span>' : ""}
           <div class="name">${esc(t.name)}</div></td>
       <td><span class="status ${t.status}">${t.status.toUpperCase()}</span></td>
       <td>${scoreCell(t.score)}</td>
@@ -302,7 +318,7 @@ function render() {
 
   $("alerts").innerHTML = (state.alerts || []).length
     ? state.alerts.map((a) => `<div class="alert">
-        <b>${esc(a.symbol)}</b> <span class="pos">score ${a.score.toFixed(0)}</span>
+        <b>${esc(a.symbol)}</b> <span class="dim">${esc(a.chain)}</span> <span class="pos">score ${a.score.toFixed(0)}</span>
         <a href="https://gmgn.ai/${a.chain}/token/${a.address}" target="_blank" rel="noopener">↗</a>
         <div class="t">${new Date(a.ts).toLocaleTimeString()}</div>
         <div class="r">${esc((a.reasons || []).slice(0, 3).join(" · "))}</div>
@@ -324,6 +340,7 @@ function detailRow(t) {
   ].filter(Boolean).join(" · ");
   const th = state.thresholds || {};
   const auth = (ok) => ok === true ? '<span class="pos">renounced</span>' : ok === false ? '<span class="neg">LIVE</span>' : '<span class="dim">unknown</span>';
+  const src = (ok) => ok === true ? '<span class="pos">verified</span>' : ok === false ? '<span class="neg">unverified</span>' : '<span class="dim">unknown</span>';
   const momentum = sc.momentum ?? 0, intensity = sc.intensity ?? 0;
   return `<tr class="detail"><td colspan="14">
     <div class="breakdown">
@@ -340,7 +357,9 @@ function detailRow(t) {
       · insiders ${pctOr(t.insiderRate)} (gate ${pctOr(th.maxInsiderRate)})
       · dev ${pctOr(t.devHoldRate)} · snipers ${pctOr(t.sniperHoldRate)} · bots ${pctOr(t.botRate)}
       · controlled ≈${pctOr(t.controlledSupply)} (gate ${pctOr(th.maxControlledSupply)})
-      · mint ${auth(t.mintRenounced)} · freeze ${auth(t.freezeRenounced)}</div>
+      ${t.mintRenounced != null || t.freezeRenounced != null ? `· mint ${auth(t.mintRenounced)} · freeze ${auth(t.freezeRenounced)}` : ""}
+      ${t.ownerRenounced != null || t.lpLockRate != null || t.buyTax != null ? `· owner ${auth(t.ownerRenounced)} · LP locked ${pctOr(t.lpLockRate)} (gate ${pctOr(th.minLpLock)}) · tax ${pctOr(t.buyTax)}/${pctOr(t.sellTax)} · source ${src(t.openSource)}` : ""}
+      ${t.creatorTokens != null ? `· creator launched ${t.creatorTokens} tokens${t.creatorOpenRatio != null ? " (" + pctOr(t.creatorOpenRatio) + " opened)" : ""}` : ""}${t.freshWalletRate != null ? ` · fresh wallets ${pctOr(t.freshWalletRate)}` : ""}</div>
     <div class="dim">${esc(t.address)} · source: ${t.source}${t.launchpad ? " · " + esc(t.launchpad) : ""} · ${links}</div>
   </td></tr>`;
 }
@@ -362,6 +381,7 @@ document.addEventListener("click", (e) => {
   }
 });
 $("search").addEventListener("input", render);
+$("chainsel").addEventListener("change", render);
 
 async function refresh() {
   try {

@@ -126,6 +126,50 @@ const PROFILES: Profile[] = [
     buyBias: 0.62,
     risk: { exchange: "pump", launchpad_status: 0 },
   },
+  // --- EVM-chain examples (0x addresses): ownership, tax and LP-lock gates ---
+  {
+    address: "0x1111111111111111111111111111111111111111",
+    symbol: "HOODY",
+    name: "clean robinhood launch",
+    createdAgoMin: 45,
+    baseHolders: 300,
+    baseVolPerMin: 800,
+    liquidity: 60_000,
+    marketCap: 500_000,
+    price: 0.0005,
+    surge: { startAgoMin: 6, holdersPerMin: 10, volMultiple: 4 },
+    smartMoney: 3,
+    buyBias: 0.63,
+    risk: { is_renounced: 1, is_open_source: 1, lock_percent: 0.95, buy_tax: "0", sell_tax: "0", exchange: "0x8366a39cc670b4001a1121b8f6a443a643e40951", launchpad_platform: "pons_v2", launchpad_status: 1 },
+  },
+  {
+    address: "0x2222222222222222222222222222222222222222",
+    symbol: "UNLOCK",
+    name: "LP not locked",
+    createdAgoMin: 120,
+    baseHolders: 400,
+    baseVolPerMin: 900,
+    liquidity: 80_000,
+    marketCap: 700_000,
+    price: 0.0007,
+    surge: { startAgoMin: 7, holdersPerMin: 9, volMultiple: 4 },
+    buyBias: 0.62,
+    risk: { is_renounced: 1, is_open_source: 1, lock_percent: 0.2, buy_tax: "0", sell_tax: "0", exchange: "0x8366a39cc670b4001a1121b8f6a443a643e40951", launchpad_platform: "pool_uniswap_v4", launchpad_status: 1 },
+  },
+  {
+    address: "0x3333333333333333333333333333333333333333",
+    symbol: "OWNED",
+    name: "owner live, 15% sell tax",
+    createdAgoMin: 90,
+    baseHolders: 350,
+    baseVolPerMin: 700,
+    liquidity: 50_000,
+    marketCap: 400_000,
+    price: 0.0004,
+    surge: { startAgoMin: 6, holdersPerMin: 8, volMultiple: 3.5 },
+    buyBias: 0.6,
+    risk: { is_renounced: 0, is_open_source: 0, lock_percent: 0.95, buy_tax: "0", sell_tax: "15", exchange: "0x8366a39cc670b4001a1121b8f6a443a643e40951", launchpad_platform: "pons_v2", launchpad_status: 1 },
+  },
   // --- risky: momentum but hard-gated ---
   {
     address: "MockBundledLaunch1010101010101010101010101010",
@@ -269,12 +313,14 @@ export class MockSource implements GmgnDataSource {
     return this.nowOverride ?? Date.now();
   }
 
+  /** Solana-style profiles answer for "sol"; the 0x profiles answer for any EVM chain. */
   async trendingRank(chain: string, interval: string): Promise<RawRankToken[]> {
     const now = this.now();
-    return PROFILES.map((p, i) => this.rankRow(p, i, chain, interval, now));
+    return PROFILES.filter((p) => isEvmAddress(p.address) === (chain !== "sol")).map((p, i) => this.rankRow(p, i, chain, interval, now));
   }
 
   async trenches(chain: string): Promise<TrenchesData> {
+    if (chain !== "sol") return { near_completion: [], completed: [] };
     const now = this.now();
     const early: RawTrenchToken[] = [
       {
@@ -393,6 +439,10 @@ export class MockSource implements GmgnDataSource {
     const minsIn = (now - surgeStart) / 60_000;
     return minsIn <= 0 ? 0 : sigmoid((minsIn - 2) / 1.5);
   }
+}
+
+function isEvmAddress(address: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(address);
 }
 
 /** Minutes elapsed since `agoMin` minutes before process start. */

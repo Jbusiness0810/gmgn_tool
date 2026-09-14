@@ -44,8 +44,13 @@ export interface RawRankToken {
   dev_team_hold_rate?: number | string | null;
   top70_sniper_hold_rate?: number | string | null;
   creator_token_status?: string | null;
-  renounced_mint?: number | string | null;
-  renounced_freeze_account?: number | string | null;
+  renounced_mint?: number | string | null;          // Solana
+  renounced_freeze_account?: number | string | null; // Solana
+  is_renounced?: number | string | null;            // EVM: contract ownership renounced
+  is_open_source?: number | string | null;          // EVM: source verified
+  lock_percent?: number | string | null;            // EVM: LP locked-or-burned share
+  buy_tax?: number | string | null;                 // EVM
+  sell_tax?: number | string | null;                // EVM
 
   // Smart money / social / activity quality
   smart_degen_count?: number | string;
@@ -100,6 +105,15 @@ export interface RawTrenchToken {
   top70_sniper_hold_rate?: number | string | null;
   renounced_mint?: number | string | null;
   renounced_freeze_account?: number | string | null;
+  owner_renounced?: string | null;          // EVM: "yes" / "no"
+  open_source?: string | null;              // EVM: "yes" / "no"
+  is_honeypot?: number | string | null;     // "yes" / "no" / "unknown" on launchpad rows
+  buy_tax?: number | string | null;
+  sell_tax?: number | string | null;
+  lock_percent?: number | string | null;
+  creator_created_count?: number | string | null;
+  creator_created_open_ratio?: number | string | null;
+  fresh_wallet_rate?: number | string | null;
   bot_degen_rate?: number | string | null;
   smart_degen_count?: number | string;
   renowned_count?: number | string;
