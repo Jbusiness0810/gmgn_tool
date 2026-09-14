@@ -33,6 +33,14 @@ function str(name: string, fallback: string): string {
   return raw === undefined || raw === "" ? fallback : raw;
 }
 
+/** Comma- or space-separated list, lower-cased, de-duplicated. */
+function list(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const items = [...new Set(raw.split(/[\s,]+/).map((s) => s.trim().toLowerCase()).filter(Boolean))];
+  return items.length ? items : fallback;
+}
+
 function bool(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return fallback;
@@ -42,7 +50,7 @@ function bool(name: string, fallback: boolean): boolean {
 export interface ScreenerConfig {
   apiKey: string;
   host: string;
-  chain: string;
+  chains: string[]; // every chain polled each cycle (GMGN: robinhood, sol, bsc, base, eth, arc, stable)
   mock: boolean;
   pollIntervalSec: number;
   port: number;
@@ -97,7 +105,7 @@ export function loadConfig(): ScreenerConfig {
   return {
     apiKey,
     host: str("GMGN_HOST", "https://openapi.gmgn.ai"),
-    chain: str("CHAIN", "robinhood"),
+    chains: list("CHAIN", ["robinhood", "sol"]),
     mock,
     pollIntervalSec: Math.max(10, num("POLL_INTERVAL_SEC", 30)),
     port: num("PORT", 4477),

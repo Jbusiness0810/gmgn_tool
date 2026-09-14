@@ -13,6 +13,7 @@ const REALERT_COOLDOWN_MS = 30 * 60 * 1000;
 const FLAG_STREAK = 2;                        // cycles at/above flag score before flagging
 
 interface CycleFetch {
+  chain: string;
   rank1m: RawRankToken[];
   rank5m: RawRankToken[];
   rank1h: RawRankToken[];
@@ -57,7 +58,8 @@ export class ScreenerEngine {
     const now = nowOverride ?? Date.now();
     try {
       const fetched = await this.fetchAll();
-      this.merge(fetched, now);
+      for (const f of fetched) this.merge(f, now);
+      this.evict(now);
       this.rescore(now);
       this.lastCycleAt = now;
       this.lastError = null;
@@ -75,21 +77,35 @@ export class ScreenerEngine {
     }
   }
 
-  private async fetchAll(): Promise<CycleFetch> {
-    const { chain } = this.cfg;
-    // 4 requests per cycle, serialized and spaced 2s apart inside the client
-    // (free tier tolerates ~1 req/s), so a cycle takes ~8s of API time.
-    const rank1m = await this.source.trendingRank(chain, "1m", { limit: 100 });
-    const rank5m = await this.source.trendingRank(chain, "5m", { limit: 100 });
-    const rank1h = await this.source.trendingRank(chain, "1h", { limit: 100 });
-    const trenchData = await this.source.trenches(chain, ["near_completion", "completed"], 50, {
-      min_holder_count: Math.max(1, Math.floor(this.cfg.minHolders / 2)),
-    });
-    const trench = [
-      ...(trenchData.near_completion ?? trenchData.pump ?? []),
-      ...(trenchData.completed ?? []),
-    ];
-    return { rank1m, rank5m, rank1h, trench };
+  /**
+   * 4 requests per chain per cycle, serialized and spaced 2s apart inside the
+   * client (the free tier tolerates ~1 req/s): ~8s of API time per chain, so
+   * two chains fit a 30s poll interval. A chain that fails is logged and
+   * skipped for the cycle rather than blanking the others.
+   */
+  private async fetchAll(): Promise<CycleFetch[]> {
+    const out: CycleFetch[] = [];
+    let firstError: unknown = null;
+    for (const chain of this.cfg.chains) {
+      try {
+        const rank1m = await this.source.trendingRank(chain, "1m", { limit: 100 });
+        const rank5m = await this.source.trendingRank(chain, "5m", { limit: 100 });
+        const rank1h = await this.source.trendingRank(chain, "1h", { limit: 100 });
+        const trenchData = await this.source.trenches(chain, ["near_completion", "completed"], 50, {
+          min_holder_count: Math.max(1, Math.floor(this.cfg.minHolders / 2)),
+        });
+        const trench = [
+          ...(trenchData.near_completion ?? trenchData.pump ?? []),
+          ...(trenchData.completed ?? []),
+        ];
+        out.push({ chain, rank1m, rank5m, rank1h, trench });
+      } catch (err) {
+        console.error(`[screener] ${chain}: fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+        firstError ??= err;
+      }
+    }
+    if (!out.length && firstError) throw firstError;
+    return out;
   }
 
   private merge(fetched: CycleFetch, now: number): void {
@@ -121,14 +137,14 @@ export class ScreenerEngine {
         marketCap: toNum(primary.market_cap),
         liquidity: toNum(primary.liquidity),
       };
-      this.upsert(address, rankFacts(primary, this.cfg.chain), snapshot, now);
+      this.upsert(tokenKey(fetched.chain, address), rankFacts(primary, fetched.chain), snapshot, now);
     }
 
     for (const raw of fetched.trench) {
       const address = raw.address;
       if (!address) continue;
       // Trenches tokens that are also in rank already got a snapshot this cycle.
-      const existing = this.tokens.get(address);
+      const existing = this.tokens.get(tokenKey(fetched.chain, address));
       if (existing && existing.lastSeenAt === now) continue;
       const snapshot: Snapshot = {
         ts: now,
@@ -145,17 +161,19 @@ export class ScreenerEngine {
         marketCap: toNum(raw.usd_market_cap) ?? toNum(raw.market_cap),
         liquidity: toNum(raw.liquidity),
       };
-      this.upsert(address, trenchFacts(raw, this.cfg.chain), snapshot, now);
-    }
-
-    // Evict tokens that fell out of every feed long ago.
-    for (const [address, token] of this.tokens) {
-      if (now - token.lastSeenAt > EVICT_AFTER_MS) this.tokens.delete(address);
+      this.upsert(tokenKey(fetched.chain, address), trenchFacts(raw, fetched.chain), snapshot, now);
     }
   }
 
-  private upsert(address: string, facts: TokenFacts, snapshot: Snapshot, now: number): void {
-    let token = this.tokens.get(address);
+  /** Drop tokens that fell out of every feed long ago. */
+  private evict(now: number): void {
+    for (const [key, token] of this.tokens) {
+      if (now - token.lastSeenAt > EVICT_AFTER_MS) this.tokens.delete(key);
+    }
+  }
+
+  private upsert(key: string, facts: TokenFacts, snapshot: Snapshot, now: number): void {
+    let token = this.tokens.get(key);
     if (!token) {
       token = {
         facts,
@@ -168,7 +186,7 @@ export class ScreenerEngine {
         lastSeenAt: now,
         flaggedAt: null,
       };
-      this.tokens.set(address, token);
+      this.tokens.set(key, token);
     }
     // Preserve fields the current feed doesn't carry (trenches rows lack some).
     token.facts = { ...token.facts, ...definedOnly(facts) };
@@ -209,9 +227,10 @@ export class ScreenerEngine {
   }
 
   private emitAlert(token: TrackedToken, now: number): void {
-    const last = this.lastAlertAt.get(token.facts.address) ?? 0;
+    const key = tokenKey(token.facts.chain, token.facts.address);
+    const last = this.lastAlertAt.get(key) ?? 0;
     if (now - last < REALERT_COOLDOWN_MS) return;
-    this.lastAlertAt.set(token.facts.address, now);
+    this.lastAlertAt.set(key, now);
 
     const alert: Alert = {
       ts: now,
@@ -259,7 +278,7 @@ export class ScreenerEngine {
       mkdirSync(this.cfg.dataDir, { recursive: true });
       const state = {
         savedAt: Date.now(),
-        chain: this.cfg.chain,
+        chains: this.cfg.chains,
         tokens: [...this.tokens.entries()],
         alerts: this.alerts,
       };
@@ -275,12 +294,15 @@ export class ScreenerEngine {
       const state = JSON.parse(readFileSync(this.statePath, "utf-8")) as {
         savedAt?: number;
         chain?: string;
+        chains?: string[];
         tokens?: [string, TrackedToken][];
         alerts?: Alert[];
       };
-      if (state.chain !== this.cfg.chain) return; // stale state for another chain
+      const saved = state.chains ?? (state.chain ? [state.chain] : []);
+      if (saved.join(",") !== this.cfg.chains.join(",")) return; // stale state for another chain set
       if (!state.savedAt || Date.now() - state.savedAt > HISTORY_WINDOW_MS) return;
-      this.tokens = new Map(state.tokens ?? []);
+      // Older state files keyed tokens by address alone; re-key by chain:address.
+      this.tokens = new Map((state.tokens ?? []).map(([k, t]) => [k.includes(":") ? k : tokenKey(t.facts.chain, t.facts.address), t]));
       this.alerts = state.alerts ?? [];
       console.log(`[screener] restored ${this.tokens.size} tokens from ${this.statePath}`);
     } catch {
@@ -320,7 +342,8 @@ export class ScreenerEngine {
       );
     return {
       updatedAt: this.lastCycleAt,
-      chain: this.cfg.chain,
+      chain: this.cfg.chains.join(" + "),
+      chains: this.cfg.chains,
       mock: this.cfg.mock,
       pollIntervalSec: this.cfg.pollIntervalSec,
       thresholds: {
@@ -354,6 +377,11 @@ export class ScreenerEngine {
       alerts: this.alerts.slice(0, 50),
     };
   }
+}
+
+/** Map key: the same address never appears on two chains, but keep them apart anyway. */
+function tokenKey(chain: string, address: string): string {
+  return `${chain}:${address}`;
 }
 
 function statusRank(s: string): number {

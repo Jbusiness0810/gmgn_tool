@@ -313,12 +313,14 @@ export class MockSource implements GmgnDataSource {
     return this.nowOverride ?? Date.now();
   }
 
+  /** Solana-style profiles answer for "sol"; the 0x profiles answer for any EVM chain. */
   async trendingRank(chain: string, interval: string): Promise<RawRankToken[]> {
     const now = this.now();
-    return PROFILES.map((p, i) => this.rankRow(p, i, chain, interval, now));
+    return PROFILES.filter((p) => isEvmAddress(p.address) === (chain !== "sol")).map((p, i) => this.rankRow(p, i, chain, interval, now));
   }
 
   async trenches(chain: string): Promise<TrenchesData> {
+    if (chain !== "sol") return { near_completion: [], completed: [] };
     const now = this.now();
     const early: RawTrenchToken[] = [
       {
@@ -437,6 +439,10 @@ export class MockSource implements GmgnDataSource {
     const minsIn = (now - surgeStart) / 60_000;
     return minsIn <= 0 ? 0 : sigmoid((minsIn - 2) / 1.5);
   }
+}
+
+function isEvmAddress(address: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(address);
 }
 
 /** Minutes elapsed since `agoMin` minutes before process start. */

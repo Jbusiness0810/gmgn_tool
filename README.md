@@ -1,9 +1,9 @@
 # GMGN Momentum Screener
 
-Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai), on Robinhood Chain by
-default (Solana, BSC, Base and Ethereum via `CHAIN`), by watching for the two
-signals that most often precede a run: **rapid holder growth** and **volume
-acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
+Flags up-and-coming tokens on [GMGN.ai](https://gmgn.ai), on Robinhood Chain and
+Solana at once by default (any mix of GMGN's chains via `CHAIN`), by watching for
+the two signals that most often precede a run: **rapid holder growth** and
+**volume acceleration**. It polls the GMGN OpenAPI, keeps a rolling history per token,
 computes the deltas itself (GMGN only serves point-in-time snapshots), scores
 every token 0–100, and raises an alert when one crosses the flag threshold —
 with hard risk gates so rugs, honeypots, wash-traded and bundled or
@@ -55,9 +55,11 @@ is correct, disable IPv6 on your interface.
 
 Every `POLL_INTERVAL_SEC` (default 30s) the engine:
 
-1. **Fetches** `GET /v1/market/rank` at three intervals (`1m`, `5m`, `1h`) plus
-   `POST /v1/trenches` (near-completion + freshly graduated launchpad tokens):
-   4 requests per cycle, spaced 2s apart. The free tier allows roughly one
+1. **Fetches**, for every chain in `CHAIN`, `GET /v1/market/rank` at three
+   intervals (`1m`, `5m`, `1h`) plus `POST /v1/trenches` (near-completion +
+   freshly graduated launchpad tokens): 4 requests per chain per cycle, spaced
+   2s apart. Every token is keyed by chain and address, and the dashboard tags
+   each row with its chain and offers a chain filter. The free tier allows roughly one
    request per second with a burst of about three; faster than that answers
    429 and repeated violations ban the key for about a minute. The client
    honours the `reset_at` in a 429 body and never stacks overlapping cycles.
@@ -172,7 +174,7 @@ All via `.env` (see [.env.example](.env.example)):
 | Variable | Default | Meaning |
 |---|---|---|
 | `GMGN_API_KEY` | — | required (except `npm run mock`) |
-| `CHAIN` | `robinhood` | `robinhood` / `sol` / `bsc` / `base` / `eth` / `arc` / `stable` (the API's own list) |
+| `CHAIN` | `robinhood,sol` | comma-separated list, all polled every cycle: `robinhood` / `sol` / `bsc` / `base` / `eth` / `arc` / `stable` (the API's own list). Each chain is 4 requests (~8s) per cycle, so raise `POLL_INTERVAL_SEC` beyond two chains |
 | `POLL_INTERVAL_SEC` | `30` | seconds between cycles (min 10) |
 | `PORT` | `4477` | dashboard port |
 | `FLAG_SCORE` / `WATCH_SCORE` | `70` / `50` | status thresholds |
