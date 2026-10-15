@@ -1,6 +1,7 @@
 # Always-on container for the screener (Render, Railway, Fly.io, a VPS, ...).
 # The app is a long-running poller + tiny HTTP server, so it needs a host that
-# keeps a process alive; serverless platforms such as Vercel cannot run it.
+# keeps a process alive. (Vercel runs it too via api/, see README, but only
+# polls while the dashboard is open.)
 FROM node:22-alpine
 WORKDIR /app
 

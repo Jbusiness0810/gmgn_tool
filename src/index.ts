@@ -5,7 +5,13 @@ import { MockSource } from "./mock.js";
 import { ScreenerEngine } from "./screener/engine.js";
 import { startServer } from "./server.js";
 
-const cfg = loadConfig();
+let cfg: ReturnType<typeof loadConfig>;
+try {
+  cfg = loadConfig();
+} catch (err) {
+  console.error(`[gmgn-screener] ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}
 
 let source: GmgnDataSource;
 let mock: MockSource | null = null;

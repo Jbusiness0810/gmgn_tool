@@ -386,7 +386,9 @@ $("chainsel").addEventListener("change", render);
 async function refresh() {
   try {
     const res = await fetch("/api/state");
-    state = await res.json();
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    state = body;
     render();
   } catch (err) {
     $("err").style.display = "block";

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/state.ts": { "maxDuration": 60 }
+  },
+  "rewrites": [{ "source": "/healthz", "destination": "/api/healthz" }]
+}

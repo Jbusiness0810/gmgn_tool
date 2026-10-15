@@ -140,10 +140,15 @@ CURVE, the rest NEW). Rows link straight to the token's gmgn.ai page.
 
 The screener is a long-running process: it polls GMGN every 30 seconds and
 keeps minutes of history in memory to compute the deltas. It therefore needs a
-host that keeps one process alive. **It cannot run on Vercel, Netlify or other
-serverless platforms**: those run your code only for the instant a page is
-requested and forget everything in between, so the deltas can never form
-(and the function crashes at startup when no `GMGN_API_KEY` is present).
+host that keeps one process alive for the best results.
+
+**Vercel works, with a catch.** Import the repo, add `GMGN_API_KEY` under
+Project → Settings → Environment Variables, and redeploy. Vercel has no
+always-on process, so the open dashboard drives polling (`api/state.ts` runs a
+cycle whenever the last one is older than `POLL_INTERVAL_SEC`). History builds
+only while someone has the page open, a cold start begins empty, and webhook
+alerts only fire while the page is open. For 24/7 screening use an always-on
+host below.
 
 Any host that runs a Docker container or a Node process works. Two easy ones:
 

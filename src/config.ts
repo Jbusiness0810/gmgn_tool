@@ -94,13 +94,15 @@ export function loadConfig(): ScreenerConfig {
   const mock = process.env.MOCK === "1" || process.argv.includes("--mock");
   const apiKey = str("GMGN_API_KEY", "");
   if (!apiKey && !mock) {
-    console.error(
-      "[gmgn-screener] GMGN_API_KEY is not set.\n" +
+    // Thrown, not process.exit(): on Vercel an exit kills the function with no
+    // useful response, while a throw lets the API route report the problem.
+    throw new Error(
+      "GMGN_API_KEY is not set.\n" +
         "  1. Go to https://gmgn.ai → API → GMGN API Management → Create API Key\n" +
         "  2. cp .env.example .env and paste the key into GMGN_API_KEY\n" +
-        "  (or run `npm run mock` to try the dashboard with synthetic data)"
+        "     (on Vercel: Project → Settings → Environment Variables, then redeploy)\n" +
+        "  (or set MOCK=1 to try the dashboard with synthetic data)"
     );
-    process.exit(1);
   }
   return {
     apiKey,
@@ -134,6 +136,7 @@ export function loadConfig(): ScreenerConfig {
     maxCreatorTokens: num("MAX_CREATOR_TOKENS", 20),
 
     alertWebhookUrl: str("ALERT_WEBHOOK_URL", ""),
-    dataDir: str("DATA_DIR", join(process.cwd(), "data")),
+    // Vercel's deployment directory is read-only; /tmp is the only writable path.
+    dataDir: str("DATA_DIR", process.env.VERCEL ? "/tmp/gmgn-screener" : join(process.cwd(), "data")),
   };
 }
